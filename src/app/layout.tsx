@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sitemap & Webcopy Builder",
-  description: "AI-powered sitemap and webcopy workflow builder.",
+  title: "Supercraft Superapp",
+  description: "AI-powered superapp builder.",
 };
 
 export default function RootLayout({
