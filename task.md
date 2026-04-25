@@ -1,0 +1,17 @@
+- `[x]` **Phase 1: Project Initialization & UI Shell**
+  - `[x]` Initialize the Next.js project with `npx create-next-app@latest ./ --typescript --eslint --tailwind --app --src-dir --import-alias "@/*"`.
+  - `[x]` Configure Tailwind theme to establish a premium and modern UI.
+  - `[x]` Build the application shell (Navigation bar, Sidebar, Dashboard layout).
+  - `[x]` Verify Phase 1 with `npm run lint` and `npm run build`.
+- `[ ]` **Phase 2: Database & Playground Setup**
+  - `[ ]` Initialize Supabase client and required database schema (Projects, Prompts, Copies tables).
+  - `[ ]` Build the Admin Playground interface (`/playground`) to test AI interactions.
+  - `[ ]` Integrate Vercel AI SDK and set up a generic `/api/generate` route.
+- `[ ]` **Phase 3: The Brief & Sitemap Builder**
+  - `[ ]` Build a dashboard and form to input a new Client Brief (support both text and PDF upload).
+  - `[ ]` Implement the "Generate Sitemap" logic.
+  - `[ ]` Create an editable, visual node graph sitemap component (e.g., using React Flow).
+- `[ ]` **Phase 4: The Webcopy Generator**
+  - `[ ]` Implement batch-generation or page-by-page generation logic for webcopy.
+  - `[ ]` Build the split-pane UI (Sitemap on left, rich-text editor on right).
+  - `[ ]` Allow the user to edit and save the generated copy back to the database.
