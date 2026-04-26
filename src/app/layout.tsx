@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { getAuthContext } from "@/utils/auth";
+import AppShell from "./AppShell";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -17,18 +19,20 @@ export const metadata: Metadata = {
   description: "AI-powered superapp builder.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const auth = await getAuthContext();
+
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
-        {children}
+        <AppShell auth={auth}>{children}</AppShell>
       </body>
     </html>
   );

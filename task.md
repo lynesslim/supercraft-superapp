@@ -4,14 +4,15 @@
   - `[x]` Build the application shell (Navigation bar, Sidebar, Dashboard layout).
   - `[x]` Verify Phase 1 with `npm run lint` and `npm run build`.
 - `[ ]` **Phase 2: Database & Playground Setup**
-  - `[ ]` Initialize Supabase client and required database schema (Projects, Prompts, Copies tables).
-  - `[ ]` Build the Admin Playground interface (`/playground`) to test AI interactions.
-  - `[ ]` Integrate Vercel AI SDK and set up a generic `/api/generate` route.
-- `[ ]` **Phase 3: The Brief & Sitemap Builder**
-  - `[ ]` Build a dashboard and form to input a new Client Brief (support both text and PDF upload).
-  - `[ ]` Implement the "Generate Sitemap" logic.
-  - `[ ]` Create an editable, visual node graph sitemap component (e.g., using React Flow).
-- `[ ]` **Phase 4: The Webcopy Generator**
-  - `[ ]` Implement batch-generation or page-by-page generation logic for webcopy.
-  - `[ ]` Build the split-pane UI (Sitemap on left, rich-text editor on right).
-  - `[ ]` Allow the user to edit and save the generated copy back to the database.
+  - `[x]` Initialize Supabase client and required database schema (Projects, Prompts, Copies tables).
+  - `[x]` Build the Admin Playground interface (`/playground`) to test AI interactions.
+  - `[x]` Integrate Vercel AI SDK and set up a generic `/api/generate` route.
+- `[x]` **Phase 3: The Brief & Sitemap Builder**
+  - `[x]` Build a dashboard and form to input a new Client Brief (support both text and PDF upload).
+  - `[x]` Implement the "Generate Sitemap" logic.
+  - `[x]` Create an editable, visual node graph sitemap component (e.g., using React Flow).
+  - `[x]` Save generated and edited sitemaps to the `sitemaps` table.
+- `[x]` **Phase 4: The Webcopy Generator**
+  - `[x]` Implement batch-generation or page-by-page generation logic for webcopy.
+  - `[x]` Build the split-pane UI (Sitemap on left, rich-text editor on right).
+  - `[x]` Allow the user to edit and save the generated copy back to the database.

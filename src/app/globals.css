@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f1ea;
-  --foreground: #17130f;
-  --card: #fffaf2;
-  --muted: #786f63;
-  --border: #e7dcca;
-  --primary: #111827;
-  --primary-foreground: #fff8eb;
-  --accent: #c76f3f;
-  --accent-soft: #f6dece;
-  --success: #236653;
+  --background: #111310;
+  --foreground: #e8eae0;
+  --card: #1a1c16;
+  --muted: #8b9180;
+  --border: rgb(255 255 255 / 0.08);
+  --primary: #a3b840;
+  --primary-foreground: #111310;
+  --accent: #a3b840;
+  --accent-soft: rgb(163 184 64 / 0.16);
+  --success: #7bc8a4;
 }
 
 @theme inline {
@@ -31,12 +31,135 @@
   --radius-4xl: 2rem;
 }
 
+html {
+  font-size: 15px;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
 }
 
+* {
+  scrollbar-color: #a3b840 #111310;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #111310;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #a3b840;
+  border: 2px solid #111310;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-corner {
+  background: #111310;
+}
+
 ::selection {
   background: var(--accent-soft);
   color: var(--foreground);
+}
+
+.canvas-scrollbar {
+  scrollbar-color: #a3b840 #111310;
+  scrollbar-width: thin;
+}
+
+.canvas-scrollbar::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+.canvas-scrollbar::-webkit-scrollbar-track {
+  background: #111310;
+}
+
+.canvas-scrollbar::-webkit-scrollbar-thumb {
+  background: #a3b840;
+  border: 2px solid #111310;
+  border-radius: 999px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes motion-fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes motion-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.94);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes motion-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes motion-status-pulse {
+    0%,
+    100% {
+      opacity: 0.65;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
+  .motion-fade-in {
+    animation: motion-fade-in 400ms ease-out both;
+  }
+
+  .motion-pop {
+    animation: motion-pop 350ms ease-out both;
+  }
+
+  .motion-slide-up {
+    animation: motion-slide-up 450ms ease-out both;
+  }
+
+  .motion-status-pulse {
+    animation: motion-status-pulse 1.2s ease-in-out infinite;
+  }
+
+  .motion-lift {
+    transition-duration: 200ms;
+    transition-property: background-color, border-color, box-shadow, color, opacity, transform;
+    transition-timing-function: ease-out;
+  }
+
+  .motion-lift:hover {
+    transform: translateY(-3px);
+  }
+
+  .motion-lift:active {
+    transform: translateY(0);
+  }
 }
