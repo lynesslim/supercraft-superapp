@@ -262,6 +262,7 @@ export default function DashboardClient({
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [projectToDelete, setProjectToDelete] = useState<DashboardProject | null>(null);
 
   const normalizedQuery = query.trim();
   const visibleProjects = useMemo(
@@ -292,17 +293,19 @@ export default function DashboardClient({
     window.setTimeout(() => setCopiedProjectId(null), 1400);
   }
 
-  async function deleteProject(project: DashboardProject) {
-    if (deletingProjectId) return;
+  function confirmDeleteProject(project: DashboardProject) {
+    setProjectToDelete(project);
+  }
 
-    const confirmed = window.confirm(`Delete "${project.name}"? This removes its project data permanently.`);
-    if (!confirmed) return;
+  async function deleteProject() {
+    if (!projectToDelete || deletingProjectId) return;
 
-    setDeletingProjectId(project.id);
+    setDeletingProjectId(projectToDelete.id);
     setNotice("Deleting project...");
+    setProjectToDelete(null);
 
     try {
-      const response = await fetch(`/api/projects/${project.id}`, {
+      const response = await fetch(`/api/projects/${projectToDelete.id}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "delete-project" }),
@@ -314,7 +317,7 @@ export default function DashboardClient({
         return;
       }
 
-      setDeletedProjectIds((current) => new Set(current).add(project.id));
+      setDeletedProjectIds((current) => new Set(current).add(projectToDelete.id));
       setNotice("Project deleted.");
       router.refresh();
     } catch (error) {
@@ -485,7 +488,7 @@ export default function DashboardClient({
                           disabled={deletingProjectId === project.id}
                           onClick={(event) => {
                             event.stopPropagation();
-                            void deleteProject(project);
+                            confirmDeleteProject(project);
                           }}
                           title="Delete project"
                           type="button"
@@ -545,6 +548,45 @@ export default function DashboardClient({
       )}
 
       <CreateProjectModal open={isModalOpen} onClose={() => setIsModalOpen(false)} />
+
+      {projectToDelete && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/65 px-4 py-6">
+          <div className="motion-pop w-full max-w-md rounded-xl border border-red-300/25 bg-[#1a1c16] p-5 shadow-2xl shadow-black/50">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500/20">
+                <Trash2 className="text-red-400" size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-red-300">Delete Project</p>
+                <p className="text-xs text-white/45">This action cannot be undone.</p>
+              </div>
+            </div>
+            <p className="mt-4 text-sm text-[#e8eae0]">
+              Are you sure you want to delete{" "}
+              <span className="font-semibold text-white">{projectToDelete.name}</span>
+              ? All project data will be permanently removed.
+            </p>
+            <div className="mt-5 flex gap-3">
+              <button
+                className="flex-1 rounded-lg border border-white/10 px-4 py-2.5 text-sm font-semibold text-white/65 transition hover:border-white/20 hover:bg-white/5"
+                disabled={!!deletingProjectId}
+                onClick={() => setProjectToDelete(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="flex-1 rounded-lg bg-red-500 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={!!deletingProjectId}
+                onClick={deleteProject}
+                type="button"
+              >
+                {deletingProjectId ? "Deleting..." : "Delete Project"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
