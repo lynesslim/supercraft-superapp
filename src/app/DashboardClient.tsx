@@ -317,6 +317,7 @@ function CreateProjectModal({
               disabled={isCreating}
               name="start_date"
               type="date"
+              defaultValue={new Date().toISOString().split("T")[0]}
             />
             <span className="text-xs font-medium text-white/35">
               Expiry is automatically set to one year after the start date.
