@@ -2,7 +2,11 @@ import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { requireEnv } from "@/utils/env";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { logServerError } from "@/utils/server-log";
 import { createClient } from "@/utils/supabase/server";
+import { validateJsonPayloadSize, validateTextLength } from "@/utils/validation";
 import type { SitemapNodeData } from "@/types/sitemap";
 
 export const runtime = "nodejs";
@@ -178,6 +182,8 @@ export async function POST(
 ) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "copies:write", { limit: 40, windowMs: 60_000 });
+  if (limited) return limited;
 
   const { id } = await context.params;
   let body: CopyActionRequest;
@@ -187,6 +193,8 @@ export async function POST(
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
+  const payloadSizeError = validateJsonPayloadSize(body, "Copy request");
+  if (payloadSizeError) return payloadSizeError;
 
   const supabase = await createClient();
 
@@ -194,6 +202,8 @@ export async function POST(
     const title = body.page?.title?.trim();
     const path = body.page?.path?.trim();
     const content = body.content?.trim() ?? "";
+    const contentError = validateTextLength(content, "Copy content");
+    if (contentError) return contentError;
 
     if (!title || !path) {
       return NextResponse.json(
@@ -216,6 +226,7 @@ export async function POST(
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
+  requireEnv("openai");
 
   const { data: sitemap, error: sitemapError } = await supabase
     .from("sitemaps")
@@ -334,7 +345,7 @@ export async function POST(
 
     return NextResponse.json({ copies });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to generate webcopy.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    logServerError("copy.generate.failed", error, { sitemapId: id });
+    return NextResponse.json({ error: "Unable to generate webcopy." }, { status: 500 });
   }
 }

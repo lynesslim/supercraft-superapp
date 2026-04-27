@@ -14,14 +14,17 @@ import {
   Trash2,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { createClient } from "@/utils/supabase/client";
 import type { DashboardProject } from "./page";
 
 const PAGE_SIZE = 20;
+const MAX_LARGE_PDF_BYTES = 60 * 1024 * 1024;
+const MAX_LARGE_PDF_FILES = 4;
 const CREATE_LOADING_MESSAGES = [
-  "📄 Reading project brief...",
-  "🔎 Extracting PDF details...",
-  "🧠 Generating project strategy...",
-  "💾 Saving project workspace...",
+  "Creating project workspace...",
+  "Uploading PDF briefs...",
+  "Analyzing uploaded PDF briefs...",
+  "Preparing project overview...",
 ];
 
 const dateFormatter = new Intl.DateTimeFormat("en", {
@@ -68,6 +71,88 @@ function truncateKey(value: string) {
   return `${value.slice(0, 8)}...${value.slice(-6)}`;
 }
 
+function validatePdfSelection(files: File[]) {
+  if (files.length > MAX_LARGE_PDF_FILES) {
+    return `Upload up to ${MAX_LARGE_PDF_FILES} PDF documents per project.`;
+  }
+
+  for (const file of files) {
+    if (file.type && file.type !== "application/pdf") {
+      return "Upload must be a PDF file.";
+    }
+
+    if (file.size > MAX_LARGE_PDF_BYTES) {
+      return `PDF files must be ${Math.floor(MAX_LARGE_PDF_BYTES / 1024 / 1024)}MB or smaller.`;
+    }
+  }
+
+  return "";
+}
+
+async function uploadProjectPdfDocuments(projectId: string, files: File[]) {
+  if (files.length === 0) return;
+
+  const supabase = createClient();
+
+  for (const file of files) {
+    const prepareResponse = await fetch(`/api/projects/${projectId}/documents/upload-url`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || "application/pdf",
+      }),
+    });
+    const prepareData = (await prepareResponse.json()) as {
+      document?: {
+        id?: string;
+        storagePath: string;
+      };
+      error?: string;
+      path?: string;
+      token?: string;
+    };
+
+    if (!prepareResponse.ok || !prepareData.path || !prepareData.token) {
+      throw new Error(prepareData.error ?? "Unable to prepare PDF upload.");
+    }
+
+    const { error } = await supabase.storage
+      .from("project-briefs")
+      .uploadToSignedUrl(prepareData.path, prepareData.token, file, {
+        contentType: file.type || "application/pdf",
+      });
+
+    if (error) {
+      if (prepareData.document) {
+        await fetch(`/api/projects/${projectId}`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "delete-document",
+            documentId: prepareData.document.id,
+            storagePath: prepareData.document.storagePath,
+          }),
+        }).catch(() => null);
+      }
+      throw new Error(error.message);
+    }
+  }
+}
+
+async function analyzeProjectPdfDocuments(projectId: string, attempts: number) {
+  for (let index = 0; index < attempts; index += 1) {
+    const response = await fetch(`/api/projects/${projectId}/documents/analyze`, {
+      method: "POST",
+    }).catch(() => null);
+
+    if (!response?.ok) {
+      return;
+    }
+  }
+}
+
 function CreateProjectModal({
   onClose,
   open,
@@ -101,9 +186,24 @@ function CreateProjectModal({
     setLoadingIndex(0);
 
     try {
+      const rawFormData = new FormData(event.currentTarget);
+      const pdfs = rawFormData
+        .getAll("pdf")
+        .filter((value): value is File => value instanceof File && value.size > 0);
+      const pdfError = validatePdfSelection(pdfs);
+
+      if (pdfError) {
+        setError(pdfError);
+        setIsCreating(false);
+        return;
+      }
+
+      rawFormData.delete("pdf");
+      rawFormData.set("has_documents", pdfs.length > 0 ? "true" : "false");
+
       const response = await fetch("/api/projects", {
         method: "POST",
-        body: new FormData(event.currentTarget),
+        body: rawFormData,
       });
       const data = (await response.json()) as { error?: string; projectId?: string };
 
@@ -112,6 +212,9 @@ function CreateProjectModal({
         setIsCreating(false);
         return;
       }
+
+      await uploadProjectPdfDocuments(data.projectId, pdfs);
+      await analyzeProjectPdfDocuments(data.projectId, pdfs.length);
 
       router.push(`/projects/${data.projectId}`);
       router.refresh();

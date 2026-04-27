@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { Edge, Node } from "@xyflow/react";
 import { requireApiRole } from "@/utils/auth";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { logServerError } from "@/utils/server-log";
 import { createAdminClient } from "@/utils/supabase/server";
 import type { SitemapNodeData } from "@/types/sitemap";
 
@@ -424,59 +426,66 @@ function createDocx(paragraphs: DocParagraph[]) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "export:word", { limit: 30, windowMs: 60_000 });
+  if (limited) return limited;
 
   const { id } = await context.params;
   const supabase = createAdminClient();
 
-  const { data: sitemap, error: sitemapError } = await supabase
-    .from("sitemaps")
-    .select("id,project_id,nodes,edges")
-    .eq("id", id)
-    .single();
+  try {
+    const { data: sitemap, error: sitemapError } = await supabase
+      .from("sitemaps")
+      .select("id,project_id,nodes,edges")
+      .eq("id", id)
+      .single();
 
-  if (sitemapError || !sitemap) {
-    return NextResponse.json(
-      { error: sitemapError?.message ?? "Sitemap not found." },
-      { status: sitemapError?.code === "PGRST116" ? 404 : 500 },
+    if (sitemapError || !sitemap) {
+      return NextResponse.json(
+        { error: sitemapError?.message ?? "Sitemap not found." },
+        { status: sitemapError?.code === "PGRST116" ? 404 : 500 },
+      );
+    }
+
+    const [{ data: project }, { data: copies, error: copiesError }] = await Promise.all([
+      supabase.from("projects").select("name").eq("id", sitemap.project_id).maybeSingle(),
+      supabase.from("page_copies").select("page_name,url_path,content").eq("sitemap_id", id),
+    ]);
+
+    if (copiesError) {
+      return NextResponse.json({ error: copiesError.message }, { status: 500 });
+    }
+
+    const nodes = Array.isArray(sitemap.nodes) ? sitemap.nodes.filter(isSitemapNode) : [];
+    const edges = Array.isArray(sitemap.edges) ? sitemap.edges.filter(isSitemapEdge) : [];
+
+    if (nodes.length === 0) {
+      return NextResponse.json({ error: "This sitemap has no pages to export." }, { status: 400 });
+    }
+
+    const projectName = project?.name?.trim() || "Sitemap";
+    const docx = createDocx(
+      buildParagraphs({
+        copies: (copies ?? []) as PageCopyRow[],
+        edges,
+        nodes,
+        projectName,
+      }),
     );
+    const filename = `${fileNameSafe(projectName)} Site Map Proposal.docx`;
+
+    return new NextResponse(docx, {
+      headers: {
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
+    });
+  } catch (error) {
+    logServerError("export.word.failed", error, { sitemapId: id });
+    return NextResponse.json({ error: "Unable to export Word document." }, { status: 500 });
   }
-
-  const [{ data: project }, { data: copies, error: copiesError }] = await Promise.all([
-    supabase.from("projects").select("name").eq("id", sitemap.project_id).maybeSingle(),
-    supabase.from("page_copies").select("page_name,url_path,content").eq("sitemap_id", id),
-  ]);
-
-  if (copiesError) {
-    return NextResponse.json({ error: copiesError.message }, { status: 500 });
-  }
-
-  const nodes = Array.isArray(sitemap.nodes) ? sitemap.nodes.filter(isSitemapNode) : [];
-  const edges = Array.isArray(sitemap.edges) ? sitemap.edges.filter(isSitemapEdge) : [];
-
-  if (nodes.length === 0) {
-    return NextResponse.json({ error: "This sitemap has no pages to export." }, { status: 400 });
-  }
-
-  const projectName = project?.name?.trim() || "Sitemap";
-  const docx = createDocx(
-    buildParagraphs({
-      copies: (copies ?? []) as PageCopyRow[],
-      edges,
-      nodes,
-      projectName,
-    }),
-  );
-  const filename = `${fileNameSafe(projectName)} Site Map Proposal.docx`;
-
-  return new NextResponse(docx, {
-    headers: {
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    },
-  });
 }

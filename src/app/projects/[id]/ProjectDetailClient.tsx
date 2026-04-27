@@ -18,6 +18,10 @@ import {
   X,
 } from "lucide-react";
 import BackButton from "@/app/BackButton";
+import { createClient } from "@/utils/supabase/client";
+
+const MAX_LARGE_PDF_BYTES = 60 * 1024 * 1024;
+const MAX_LARGE_PDF_FILES = 4;
 
 export type ProjectDetails = {
   additional_details: string;
@@ -47,11 +51,16 @@ export type PageCopy = {
 };
 
 export type ProjectDocument = {
+  analysisError?: string | null;
+  analysisStatus: "uploaded" | "processing" | "ready" | "failed";
+  analysisSummary?: string | null;
   fileName: string;
   fileSize: number;
   id?: string;
   mimeType: string;
-  publicUrl: string;
+  openaiFileId?: string | null;
+  openaiVectorStoreId?: string | null;
+  signedUrl: string;
   storagePath: string;
 };
 
@@ -116,6 +125,31 @@ function addOneYearDate(value: string) {
   return date.toISOString().slice(0, 10);
 }
 
+function validatePdfSelection(files: File[]) {
+  if (files.length > MAX_LARGE_PDF_FILES) {
+    return `Upload up to ${MAX_LARGE_PDF_FILES} PDF documents per project.`;
+  }
+
+  for (const file of files) {
+    if (file.type && file.type !== "application/pdf") {
+      return "Upload must be a PDF file.";
+    }
+
+    if (file.size > MAX_LARGE_PDF_BYTES) {
+      return `PDF files must be ${Math.floor(MAX_LARGE_PDF_BYTES / 1024 / 1024)}MB or smaller.`;
+    }
+  }
+
+  return "";
+}
+
+function documentStatusLabel(document: ProjectDocument) {
+  if (document.analysisStatus === "ready") return "AI ready";
+  if (document.analysisStatus === "processing") return "Processing";
+  if (document.analysisStatus === "failed") return "AI unavailable";
+  return "Uploaded";
+}
+
 export default function ProjectDetailClient({
   canvasHref,
   initialCopies,
@@ -136,6 +170,7 @@ export default function ProjectDetailClient({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
+  const [isAnalyzingDocuments, setIsAnalyzingDocuments] = useState(false);
   const [isUploadingDocuments, setIsUploadingDocuments] = useState(false);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState(() =>
@@ -256,36 +291,145 @@ export default function ProjectDetailClient({
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
+    const selectedFiles = Array.from(files);
+    const pdfError = validatePdfSelection(selectedFiles);
+    if (pdfError) {
+      setNotice(pdfError);
+      event.target.value = "";
+      return;
+    }
+
     setIsUploadingDocuments(true);
-    setNotice("Uploading PDFs and extracting brief text...");
+    setNotice("Uploading PDFs to private storage...");
 
     try {
-      const formData = new FormData();
-      Array.from(files).forEach((file) => formData.append("pdf", file));
-      const response = await fetch(`/api/projects/${projectId}`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = (await response.json()) as {
-        details?: ProjectDetails;
-        documents?: ProjectDocument[];
-        error?: string;
-      };
+      const supabase = createClient();
+      const uploadedDocuments: ProjectDocument[] = [];
 
-      if (!response.ok || !data.details || !data.documents) {
-        setNotice(data.error ?? "Unable to upload documents.");
-        return;
+      for (const file of selectedFiles) {
+        const prepareResponse = await fetch(`/api/projects/${projectId}/documents/upload-url`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: file.name,
+            fileSize: file.size,
+            mimeType: file.type || "application/pdf",
+          }),
+        });
+        const prepareData = (await prepareResponse.json()) as {
+          document?: ProjectDocument;
+          error?: string;
+          path?: string;
+          token?: string;
+        };
+
+        if (!prepareResponse.ok || !prepareData.path || !prepareData.token || !prepareData.document) {
+          setNotice(prepareData.error ?? "Unable to prepare PDF upload.");
+          return;
+        }
+
+        const { error } = await supabase.storage
+          .from("project-briefs")
+          .uploadToSignedUrl(prepareData.path, prepareData.token, file, {
+            contentType: file.type || "application/pdf",
+          });
+
+        if (error) {
+          await fetch(`/api/projects/${projectId}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "delete-document",
+              documentId: prepareData.document.id,
+              storagePath: prepareData.document.storagePath,
+            }),
+          }).catch(() => null);
+          throw new Error(error.message);
+        }
+
+        uploadedDocuments.push(prepareData.document);
       }
 
-      setDocuments((current) => [...data.documents!, ...current]);
-      setSavedDetails(data.details);
-      setDraftDetails(data.details);
-      setNotice("PDF documents uploaded and brief text updated.");
+      setDocuments((current) => [...uploadedDocuments, ...current]);
+      await analyzeDocuments(uploadedDocuments.length);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to upload documents.");
     } finally {
       event.target.value = "";
       setIsUploadingDocuments(false);
+    }
+  }
+
+  async function analyzeDocuments(attempts = 1) {
+    setIsAnalyzingDocuments(true);
+    setNotice("Analyzing uploaded PDF...");
+
+    try {
+      let analyzedCount = 0;
+
+      for (let index = 0; index < attempts; index += 1) {
+        const response = await fetch(`/api/projects/${projectId}/documents/analyze`, {
+          method: "POST",
+        });
+        const data = (await response.json()) as {
+          details?: ProjectDetails;
+          documentId?: string;
+          error?: string;
+          status?: ProjectDocument["analysisStatus"];
+        };
+
+        if (!response.ok) {
+          if (data.documentId) {
+            setDocuments((current) =>
+              current.map((document) =>
+                document.id === data.documentId
+                  ? {
+                      ...document,
+                      analysisError: data.error ?? "Document uploaded, AI analysis unavailable.",
+                      analysisStatus: "failed",
+                    }
+                  : document,
+              ),
+            );
+          }
+          setNotice(data.error ?? "Document uploaded, AI analysis unavailable.");
+          return;
+        }
+
+        if (data.documentId && data.status) {
+          setDocuments((current) =>
+            current.map((document) =>
+              document.id === data.documentId
+                ? {
+                    ...document,
+                    analysisError: null,
+                    analysisStatus: data.status ?? "ready",
+                  }
+                : document,
+            ),
+          );
+        }
+
+        if (data.details) {
+          setSavedDetails(data.details);
+          setDraftDetails(data.details);
+          analyzedCount += 1;
+        }
+
+        if (!data.documentId) {
+          break;
+        }
+      }
+
+      setNotice(
+        analyzedCount > 0
+          ? "PDF analysis completed and project overview updated."
+          : "No uploaded documents are waiting for analysis.",
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Document uploaded, AI analysis unavailable.");
+    } finally {
+      setIsAnalyzingDocuments(false);
     }
   }
 
@@ -325,7 +469,7 @@ export default function ProjectDetailClient({
       );
       setSavedDetails(data.details);
       setDraftDetails(data.details);
-      setNotice("PDF document removed and brief text updated.");
+      setNotice("PDF document removed.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Unable to remove document.");
     } finally {
@@ -452,24 +596,49 @@ export default function ProjectDetailClient({
                     <FileText size={16} className="text-[#a3b840]" />
                     <h2 className="text-sm font-bold text-[#f4f6ea]">Documents</h2>
                   </div>
-                  {isEditing ? (
-                    <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full border border-white/10 bg-white/8 px-3 py-2 text-xs font-bold text-white/65 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a]">
-                      {isUploadingDocuments ? (
-                        <Loader2 className="animate-spin" size={14} />
-                      ) : (
-                        <Plus size={14} />
-                      )}
-                      {isUploadingDocuments ? "Uploading..." : "Add PDF"}
-                      <input
-                        accept="application/pdf"
-                        className="sr-only"
-                        disabled={isUploadingDocuments}
-                        multiple
-                        onChange={uploadDocuments}
-                        type="file"
-                      />
-                    </label>
-                  ) : null}
+                  <div className="flex flex-wrap gap-2">
+                    {documents.some((document) =>
+                      ["uploaded", "failed"].includes(document.analysisStatus),
+                    ) ? (
+                      <button
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/8 px-3 py-2 text-xs font-bold text-white/65 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a] disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={isAnalyzingDocuments}
+                        onClick={() =>
+                          void analyzeDocuments(
+                            documents.filter((document) =>
+                              ["uploaded", "failed"].includes(document.analysisStatus),
+                            ).length,
+                          )
+                        }
+                        type="button"
+                      >
+                        {isAnalyzingDocuments ? (
+                          <Loader2 className="animate-spin" size={14} />
+                        ) : (
+                          <RefreshCw size={14} />
+                        )}
+                        {isAnalyzingDocuments ? "Analyzing..." : "Analyze PDF"}
+                      </button>
+                    ) : null}
+                    {isEditing ? (
+                      <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full border border-white/10 bg-white/8 px-3 py-2 text-xs font-bold text-white/65 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a]">
+                        {isUploadingDocuments ? (
+                          <Loader2 className="animate-spin" size={14} />
+                        ) : (
+                          <Plus size={14} />
+                        )}
+                        {isUploadingDocuments ? "Uploading..." : "Add PDF"}
+                        <input
+                          accept="application/pdf"
+                          className="sr-only"
+                          disabled={isUploadingDocuments}
+                          multiple
+                          onChange={uploadDocuments}
+                          type="file"
+                        />
+                      </label>
+                    ) : null}
+                  </div>
                 </div>
                 {documents.length > 0 ? (
                   <div className="grid gap-2">
@@ -487,29 +656,38 @@ export default function ProjectDetailClient({
                             {document.fileName}
                           </p>
                           <p className="mt-0.5 text-xs text-white/35">
-                            {formatFileSize(document.fileSize)}
+                            {formatFileSize(document.fileSize)} · {documentStatusLabel(document)}
                           </p>
+                          {document.analysisError ? (
+                            <p className="mt-1 text-xs text-amber-200/80">
+                              {document.analysisError}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="flex shrink-0 gap-2">
-                          <a
-                            aria-label={`Open ${document.fileName}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-white/55 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a]"
-                            href={document.publicUrl}
-                            rel="noreferrer"
-                            target="_blank"
-                            title="Open PDF"
-                          >
-                            <ExternalLink size={15} />
-                          </a>
-                          <a
-                            aria-label={`Download ${document.fileName}`}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-white/8 text-white/60 transition hover:bg-[#a3b840] hover:text-[#111310]"
-                            download={document.fileName}
-                            href={document.publicUrl}
-                            title="Download PDF"
-                          >
-                            <Download size={15} />
-                          </a>
+                          {document.signedUrl ? (
+                            <>
+                              <a
+                                aria-label={`Open ${document.fileName}`}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-white/55 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a]"
+                                href={document.signedUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                                title="Open PDF"
+                              >
+                                <ExternalLink size={15} />
+                              </a>
+                              <a
+                                aria-label={`Download ${document.fileName}`}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-white/8 text-white/60 transition hover:bg-[#a3b840] hover:text-[#111310]"
+                                download={document.fileName}
+                                href={document.signedUrl}
+                                title="Download PDF"
+                              >
+                                <Download size={15} />
+                              </a>
+                            </>
+                          ) : null}
                           {isEditing ? (
                             <button
                               aria-label={`Remove ${document.fileName}`}

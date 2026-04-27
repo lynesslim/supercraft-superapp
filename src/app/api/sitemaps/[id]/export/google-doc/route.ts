@@ -2,6 +2,9 @@ import { createSign } from "crypto";
 import { NextResponse } from "next/server";
 import type { Edge, Node } from "@xyflow/react";
 import { requireApiRole } from "@/utils/auth";
+import { requireGoogleExportEnv } from "@/utils/env";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { logServerError } from "@/utils/server-log";
 import { createAdminClient } from "@/utils/supabase/server";
 import type { SitemapNodeData } from "@/types/sitemap";
 
@@ -33,6 +36,7 @@ function base64Url(value: Buffer | string) {
 }
 
 function getGooglePrivateKey() {
+  requireGoogleExportEnv();
   return process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n");
 }
 
@@ -313,11 +317,13 @@ async function createGoogleDoc({
 }
 
 export async function POST(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "export:google-doc", { limit: 20, windowMs: 60_000 });
+  if (limited) return limited;
 
   const { id } = await context.params;
   const supabase = createAdminClient();
@@ -381,7 +387,7 @@ export async function POST(
 
     return NextResponse.json(googleDoc);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to export Google Doc.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    logServerError("export.google_doc.failed", error, { sitemapId: id });
+    return NextResponse.json({ error: "Unable to export Google Doc." }, { status: 500 });
   }
 }

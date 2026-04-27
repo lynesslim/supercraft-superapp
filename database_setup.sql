@@ -136,26 +136,30 @@ CREATE TABLE IF NOT EXISTS page_copies (
 );
 
 -- 5. Project Documents Table
--- Stores public links to original uploaded project intake PDF briefs.
+-- Stores private project intake PDF briefs and delayed AI analysis status.
 CREATE TABLE IF NOT EXISTS project_documents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   file_name TEXT NOT NULL,
   storage_path TEXT NOT NULL,
-  public_url TEXT NOT NULL,
+  public_url TEXT,
   mime_type TEXT NOT NULL DEFAULT 'application/pdf',
   file_size BIGINT NOT NULL DEFAULT 0,
+  analysis_status TEXT NOT NULL DEFAULT 'uploaded'
+    CHECK (analysis_status IN ('uploaded', 'processing', 'ready', 'failed')),
+  analysis_summary TEXT,
+  analysis_error TEXT,
+  openai_file_id TEXT,
+  openai_vector_store_id TEXT,
+  analyzed_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS project_documents_project_id_created_at_idx
   ON project_documents (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS project_documents_analysis_status_idx
+  ON project_documents (analysis_status);
 
--- Create a public Supabase Storage bucket named project-briefs in the
--- Supabase dashboard if it does not already exist. The app also attempts to
--- create this bucket automatically with the service-role key.
-
--- (Optional) If you use Row Level Security in your app, you can enable it here:
--- ALTER TABLE system_prompts ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE sitemaps ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE page_copies ENABLE ROW LEVEL SECURITY;
+-- Create a private Supabase Storage bucket named project-briefs. The app also
+-- attempts to create this bucket automatically with the service-role key and
+-- serves temporary signed URLs to authenticated app users.

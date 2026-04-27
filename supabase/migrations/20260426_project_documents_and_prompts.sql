@@ -14,11 +14,20 @@ CREATE TABLE IF NOT EXISTS project_documents (
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   file_name TEXT NOT NULL,
   storage_path TEXT NOT NULL,
-  public_url TEXT NOT NULL,
+  public_url TEXT,
   mime_type TEXT NOT NULL DEFAULT 'application/pdf',
   file_size BIGINT NOT NULL DEFAULT 0,
+  analysis_status TEXT NOT NULL DEFAULT 'uploaded'
+    CHECK (analysis_status IN ('uploaded', 'processing', 'ready', 'failed')),
+  analysis_summary TEXT,
+  analysis_error TEXT,
+  openai_file_id TEXT,
+  openai_vector_store_id TEXT,
+  analyzed_at TIMESTAMP WITH TIME ZONE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS project_documents_project_id_created_at_idx
   ON project_documents (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS project_documents_analysis_status_idx
+  ON project_documents (analysis_status);

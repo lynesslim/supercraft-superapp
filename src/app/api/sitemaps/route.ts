@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { validateJsonPayloadSize, validateTextLength } from "@/utils/validation";
 import { createAdminClient, createClient } from "@/utils/supabase/server";
 
 type CreateSitemapRequest = {
@@ -84,6 +86,8 @@ async function getOrCreateProjectId({
 export async function POST(request: Request) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "sitemaps:create", { limit: 60, windowMs: 60_000 });
+  if (limited) return limited;
 
   let body: CreateSitemapRequest;
 
@@ -99,6 +103,10 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  const payloadSizeError = validateJsonPayloadSize(body, "Sitemap");
+  if (payloadSizeError) return payloadSizeError;
+  const briefError = typeof body.brief === "string" ? validateTextLength(body.brief, "Brief") : null;
+  if (briefError) return briefError;
 
   const supabase = await createClient();
 

@@ -16,30 +16,10 @@ const fallbackPrompts: PromptRow[] = [
     prompt_text:
       "You are an expert UX designer and content strategist. Given project context, create a premium website sitemap. Return only the structured sitemap object required by the schema. Use stable kebab-case ids. Use null parentId for top-level pages. Pages should be practical, conversion-aware, and useful for the project strategy.",
   },
-  {
-    name: "webcopy_generator",
-    prompt_text:
-      "You are an expert conversion copywriter. Generate rich-text Markdown webcopy for the supplied website page. Use specific, useful content rather than placeholders. Include conversion-focused sections, clear hierarchy, and CTA copy. Return Markdown only.",
-  },
-  {
-    name: "project_strategy_generator",
-    prompt_text:
-      "You are a senior website strategist. Create concise, useful project strategy notes for a website planning workflow. Return only valid structured data matching the required schema. Create: industry as a concise business category; summary as a 2-3 sentence overview; usp as the strongest positioning or differentiator; strategy_sheet as practical website strategy covering audience, positioning, tone, conversion goals, content priorities, key messaging, trust signals, and conversion opportunities. Write strategy_sheet as plain text or concise bullets, never JSON or code. If supplied URLs are present, use web_search to inspect relevant supplied URLs and web results, treating supplied URLs as client-provided context.",
-  },
-  {
-    name: "project_detail_refiner",
-    prompt_text:
-      "You are a senior website strategist editing project planning notes. Be specific, concise, and useful. Return only the requested field content with no preamble. For Industry and Staging Base URL, return one concise plain-text value only. For longer fields, preserve useful specifics and avoid labels unless the content itself needs headings. If no feedback is provided, regenerate the target field with a clearer, more useful version.",
-  },
-  {
+{
     name: "webcopy_refinement",
     prompt_text:
       "You are editing Markdown website copy. Return only the revised Markdown text requested, with no preamble. Mode meanings: regenerate means regenerate the full page copy; regenerate-selection means rewrite only the selected excerpt; paraphrase means preserve meaning with new wording; shorten means keep the core message in fewer words; expand means add useful specific detail; change-tone means apply the feedback tone; bullet-points means convert the selected excerpt into concise Markdown bullet points. For selection tasks, return only the rewritten selected excerpt and do not include surrounding page titles, labels, or context unless they are inside the selected text. If the selected excerpt does not begin with a Markdown heading, do not begin with a heading.",
-  },
-  {
-    name: "word_export_formatter",
-    prompt_text:
-      "You are formatting website sitemap and web copy content for a client-facing Word document. Preserve page hierarchy, use clear headings, separate sections cleanly, and keep formatting professional and readable.",
   },
 ];
 
@@ -54,8 +34,6 @@ const samples = {
     "Field: USP. Current value: Reliable tyre and autocare workshop. Feedback: make it sharper, more premium, and more specific.",
   webcopy_refinement:
     "Selected text: Our tyre services are fast and affordable. Task: make it more premium, specific, and trustworthy while keeping it short.",
-  word_export_formatter:
-    "Format this copy outline for a client proposal document: Home, About, Services, Tyre Replacement, Wheel Alignment, Contact.",
 };
 
 const promptLabels: Record<string, string> = {
@@ -64,8 +42,10 @@ const promptLabels: Record<string, string> = {
   sitemap_generator: "Sitemap Architect",
   webcopy_refinement: "Copy Refiner",
   webcopy_generator: "Webcopy Director",
-  word_export_formatter: "Word Export Formatter",
 };
+
+const MAX_PLAYGROUND_PDF_BYTES = 60 * 1024 * 1024;
+const MAX_PLAYGROUND_TOTAL_PDF_BYTES = 90 * 1024 * 1024;
 
 function mergePrompts(remotePrompts: PromptRow[]) {
   const byName = new Map(fallbackPrompts.map((prompt) => [prompt.name, prompt]));
@@ -77,14 +57,31 @@ function mergePrompts(remotePrompts: PromptRow[]) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function validatePlaygroundPdfSelection(files: File[]) {
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_PLAYGROUND_TOTAL_PDF_BYTES) {
+    return `Total PDF size must be ${Math.floor(MAX_PLAYGROUND_TOTAL_PDF_BYTES / 1024 / 1024)}MB or smaller.`;
+  }
+
+  for (const file of files) {
+    if (file.size > MAX_PLAYGROUND_PDF_BYTES) {
+      return `Each PDF must be ${Math.floor(MAX_PLAYGROUND_PDF_BYTES / 1024 / 1024)}MB or smaller.`;
+    }
+  }
+
+  return "";
+}
+
 export default function PlaygroundPage() {
   const [prompts, setPrompts] = useState<PromptRow[]>(fallbackPrompts);
   const [activeName, setActiveName] = useState(fallbackPrompts[0].name);
   const [brief, setBrief] = useState(samples.sitemap_generator);
   const [output, setOutput] = useState("");
   const [notice, setNotice] = useState("Loading prompt library...");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, startSaving] = useTransition();
   const [isTesting, startTesting] = useTransition();
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
   const activePrompt =
     prompts.find((prompt) => prompt.name === activeName) ?? prompts[0];
@@ -125,6 +122,34 @@ export default function PlaygroundPage() {
     setActiveName(name);
     setBrief(samples[name as keyof typeof samples] ?? brief);
     setOutput("");
+    setSelectedFiles([]);
+  }
+
+  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []).filter(
+      (f) => f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"),
+    );
+    setSelectedFiles((prev) => {
+      const nextFiles = [...prev, ...files];
+      const validationError = validatePlaygroundPdfSelection(nextFiles);
+      if (validationError) {
+        setErrorMessage(validationError);
+        setNotice("Test failed.");
+        return prev;
+      }
+
+      return nextFiles;
+    });
+    event.target.value = "";
+  }
+
+  function removeFile(index: number) {
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function clearError() {
+    setErrorMessage(null);
+    setNotice("Ready.");
   }
 
   function savePrompt() {
@@ -150,17 +175,46 @@ export default function PlaygroundPage() {
   function testPrompt() {
     startTesting(async () => {
       setOutput("");
-      setNotice("Running prompt test through /api/generate...");
+      setErrorMessage(null);
+      setNotice(selectedFiles.length > 0 ? "Running with PDF attachments..." : "Running prompt test...");
 
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ system: activePrompt.prompt_text, prompt: brief }),
-      });
-      const data = (await response.json()) as { text?: string; error?: string };
+      const useMultipart = selectedFiles.length > 0;
+      let response: Response;
+      let data: { text?: string; error?: string };
 
-      if (!response.ok) {
-        setNotice(data.error ?? "Prompt test failed.");
+      if (useMultipart) {
+        const validationError = validatePlaygroundPdfSelection(selectedFiles);
+        if (validationError) {
+          setErrorMessage(validationError);
+          setNotice("Test failed.");
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("system", activePrompt.prompt_text);
+        formData.append("prompt", brief);
+        for (const file of selectedFiles) {
+          formData.append("files", file);
+        }
+        response = await fetch("/api/playground/generate", { method: "POST", body: formData });
+      } else {
+        response = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ system: activePrompt.prompt_text, prompt: brief }),
+        });
+      }
+
+      try {
+        data = await response.json();
+      } catch {
+        data = { error: "Invalid response from server" };
+      }
+
+      if (!response.ok || data.error) {
+        const errorMsg = data.error ?? `Request failed with status ${response.status}`;
+        setErrorMessage(errorMsg);
+        setNotice("Test failed.");
         return;
       }
 
@@ -284,14 +338,66 @@ export default function PlaygroundPage() {
                 value={brief}
               />
 
+              <div className="mt-4">
+                <label className="block text-sm font-semibold text-white/65">
+                  PDF attachments (optional)
+                </label>
+                <input
+                  className="mt-2 block w-full text-sm text-white/50 file:mr-4 file:rounded-lg file:border file:border-[#a3b840]/30 file:bg-[#1a1c16] file:px-4 file:py-2 file:text-sm file:font-semibold file:text-[#a3b840] file:transition hover:file:bg-[#222420] file:cursor-pointer"
+                  accept=".pdf,application/pdf"
+                  id="pdf-files"
+                  multiple
+                  onChange={handleFileChange}
+                  type="file"
+                />
+                {selectedFiles.length > 0 && (
+                  <ul className="mt-3 flex flex-wrap gap-2">
+                    {selectedFiles.map((file, i) => (
+                      <li
+                        className="flex items-center gap-2 rounded-lg border border-[#a3b840]/20 bg-[#111310] px-3 py-1.5 text-xs text-white/70"
+                        key={`${file.name}-${i}`}
+                      >
+                        <span>{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                        <span className="font-medium text-white/90">{file.name}</span>
+                        <button
+                          className="ml-1 text-white/40 transition hover:text-[#ff6b6b]"
+                          onClick={() => removeFile(i)}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
               <button
                 className="mt-4 w-full rounded-lg bg-[#a3b840] px-5 py-3 text-sm font-bold text-[#111310] shadow-xl shadow-black/20 transition hover:bg-[#c8db5a] disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={isTesting || !brief.trim() || !activePrompt.prompt_text.trim()}
+                disabled={isTesting || (!brief.trim() && selectedFiles.length === 0) || !activePrompt.prompt_text.trim()}
                 onClick={testPrompt}
                 type="button"
               >
-                {isTesting ? "Generating..." : "Run Test Generation"}
+                {isTesting ? "Generating..." : selectedFiles.length > 0 ? `Run Test with ${selectedFiles.length} PDF${selectedFiles.length > 1 ? "s" : ""}` : "Run Test Generation"}
               </button>
+
+              {errorMessage && (
+                <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-red-400">Test failed</p>
+                      <p className="mt-1 text-sm text-red-300/80">{errorMessage}</p>
+                    </div>
+                    <button
+                      className="shrink-0 text-red-400/60 transition hover:text-red-300"
+                      onClick={clearError}
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-5 min-h-[320px] rounded-lg border border-white/10 bg-[#111310] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/35">

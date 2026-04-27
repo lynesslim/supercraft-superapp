@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import type { Node } from "@xyflow/react";
 import { requirePageRole } from "@/utils/auth";
+import { createSignedDocumentUrl } from "@/utils/project-documents";
 import { createAdminClient } from "@/utils/supabase/server";
 import type { SitemapNodeData } from "@/types/sitemap";
 import ProjectDetailClient, {
@@ -61,11 +62,15 @@ type ProjectContext = {
 };
 
 type ProjectDocumentRow = {
+  analysis_error: string | null;
+  analysis_status: "uploaded" | "processing" | "ready" | "failed" | null;
+  analysis_summary: string | null;
   file_name: string;
   file_size: number | null;
   id: string;
   mime_type: string | null;
-  public_url: string;
+  openai_file_id: string | null;
+  openai_vector_store_id: string | null;
   storage_path: string;
 };
 
@@ -150,7 +155,7 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
     : { data: [] };
   const { data: documentRows, error: documentsError } = await supabase
     .from("project_documents")
-    .select("id,file_name,file_size,mime_type,public_url,storage_path")
+    .select("id,file_name,file_size,mime_type,public_url,storage_path,analysis_status,analysis_summary,analysis_error,openai_file_id,openai_vector_store_id")
     .eq("project_id", projectRow.id)
     .order("created_at", { ascending: false });
 
@@ -164,27 +169,42 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   const sitemapPages = getSitemapPages(latestSitemap?.nodes);
   const tableDocuments = documentsError
     ? []
-    : ((documentRows ?? []) as ProjectDocumentRow[]).map((document) => ({
-        fileName: document.file_name,
-        fileSize: document.file_size ?? 0,
-        id: document.id,
-        mimeType: document.mime_type ?? "application/pdf",
-        publicUrl: document.public_url,
-        storagePath: document.storage_path,
-      }));
+    : await Promise.all(
+        ((documentRows ?? []) as ProjectDocumentRow[]).map(async (document) => {
+          let signedUrl = "";
+
+          try {
+            signedUrl = await createSignedDocumentUrl(document.storage_path);
+          } catch {
+            signedUrl = "";
+          }
+
+          return {
+            analysisError: document.analysis_error,
+            analysisStatus: document.analysis_status ?? "uploaded",
+            analysisSummary: document.analysis_summary,
+            fileName: document.file_name,
+            fileSize: document.file_size ?? 0,
+            id: document.id,
+            mimeType: document.mime_type ?? "application/pdf",
+            openaiFileId: document.openai_file_id,
+            openaiVectorStoreId: document.openai_vector_store_id,
+            signedUrl,
+            storagePath: document.storage_path,
+          };
+        }),
+      );
   const fallbackDocuments = Array.isArray(projectContext?.documents)
     ? projectContext.documents
         .map((document): ProjectDocument | null => {
           if (!document || typeof document !== "object") return null;
           const value = document as Record<string, unknown>;
-          const publicUrl = value.publicUrl ?? value.public_url;
           const storagePath = value.storagePath ?? value.storage_path;
           const fileName = value.fileName ?? value.file_name;
           const mimeType = value.mimeType ?? value.mime_type;
           const fileSize = value.fileSize ?? value.file_size;
 
           if (
-            typeof publicUrl !== "string" ||
             typeof storagePath !== "string" ||
             typeof fileName !== "string"
           ) {
@@ -192,17 +212,44 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
           }
 
           return {
+            analysisError:
+              typeof value.analysisError === "string"
+                ? value.analysisError
+                : typeof value.analysis_error === "string"
+                  ? value.analysis_error
+                  : null,
+            analysisStatus:
+              value.analysisStatus === "processing" ||
+              value.analysisStatus === "ready" ||
+              value.analysisStatus === "failed" ||
+              value.analysis_status === "processing" ||
+              value.analysis_status === "ready" ||
+              value.analysis_status === "failed"
+                ? ((value.analysisStatus ?? value.analysis_status) as ProjectDocument["analysisStatus"])
+                : "uploaded",
+            analysisSummary:
+              typeof value.analysisSummary === "string"
+                ? value.analysisSummary
+                : typeof value.analysis_summary === "string"
+                  ? value.analysis_summary
+                  : null,
             fileName,
             fileSize: typeof fileSize === "number" ? fileSize : 0,
             id: typeof value.id === "string" ? value.id : storagePath,
             mimeType: typeof mimeType === "string" ? mimeType : "application/pdf",
-            publicUrl,
+            signedUrl: "",
             storagePath,
           };
         })
         .filter((document): document is ProjectDocument => Boolean(document))
     : [];
-  const documents = tableDocuments.length > 0 ? tableDocuments : fallbackDocuments;
+  const signedFallbackDocuments = await Promise.all(
+    fallbackDocuments.map(async (document) => ({
+      ...document,
+      signedUrl: await createSignedDocumentUrl(document.storagePath),
+    })),
+  );
+  const documents = tableDocuments.length > 0 ? tableDocuments : signedFallbackDocuments;
   const details: ProjectDetails = {
     additional_details: valueOrEmpty(projectRow.additional_details ?? projectContext?.additional_details),
     brief: valueOrEmpty(projectRow.brief ?? projectContext?.brief ?? latestSitemap?.brief),

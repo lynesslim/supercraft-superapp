@@ -2,6 +2,10 @@ import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { requireEnv } from "@/utils/env";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { logServerError } from "@/utils/server-log";
+import { validateJsonPayloadSize, validateTextLength } from "@/utils/validation";
 
 type GenerateRequest = {
   model?: string;
@@ -13,6 +17,9 @@ type GenerateRequest = {
 export async function POST(request: Request) {
   const authError = await requireApiRole(["superadmin"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "admin:generate", { limit: 30, windowMs: 60_000 });
+  if (limited) return limited;
+  requireEnv("openai");
 
   let body: GenerateRequest;
 
@@ -24,6 +31,8 @@ export async function POST(request: Request) {
 
   const prompt = body.prompt?.trim();
   const system = body.system?.trim();
+  const payloadSizeError = validateJsonPayloadSize(body, "Generate request");
+  if (payloadSizeError) return payloadSizeError;
 
   if (!prompt || !system) {
     return NextResponse.json(
@@ -31,6 +40,10 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  const promptError = validateTextLength(prompt, "Prompt");
+  if (promptError) return promptError;
+  const systemError = validateTextLength(system, "System prompt");
+  if (systemError) return systemError;
 
   try {
     const result = await generateText({
@@ -43,9 +56,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ text: result.text });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Unable to generate AI output.";
-
-    return NextResponse.json({ error: message }, { status: 500 });
+    logServerError("admin.generate.failed", error);
+    return NextResponse.json({ error: "Unable to generate AI output." }, { status: 500 });
   }
 }

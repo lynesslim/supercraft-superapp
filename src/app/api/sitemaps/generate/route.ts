@@ -2,7 +2,11 @@ import { openai } from "@ai-sdk/openai";
 import { generateObject, jsonSchema } from "ai";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { requireEnv } from "@/utils/env";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { logServerError } from "@/utils/server-log";
 import { createAdminClient, createClient } from "@/utils/supabase/server";
+import { validatePdfFiles, validateTextLength } from "@/utils/validation";
 import type { Edge, Node } from "@xyflow/react";
 import type { GeneratedSitemap, SitemapNodeData, SitemapPage } from "@/types/sitemap";
 
@@ -293,6 +297,9 @@ async function getProjectContextBrief({
 export async function POST(request: Request) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "sitemaps:generate", { limit: 20, windowMs: 60_000 });
+  if (limited) return limited;
+  requireEnv("openai");
 
   let formData: FormData;
 
@@ -306,12 +313,11 @@ export async function POST(request: Request) {
   const requestedProjectId = formData.get("projectId");
   const pdf = formData.get("pdf");
   let pdfText = "";
+  const files = pdf instanceof File && pdf.size > 0 ? [pdf] : [];
+  const pdfValidationError = validatePdfFiles(files);
+  if (pdfValidationError) return pdfValidationError;
 
   if (pdf instanceof File && pdf.size > 0) {
-    if (pdf.type !== "application/pdf") {
-      return NextResponse.json({ error: "Upload must be a PDF file." }, { status: 400 });
-    }
-
     try {
       pdfText = await extractPdfText(pdf);
     } catch (error) {
@@ -324,6 +330,8 @@ export async function POST(request: Request) {
     .filter(Boolean)
     .join("\n\n")
     .trim();
+  const briefError = validateTextLength(combinedBrief, "Brief");
+  if (briefError) return briefError;
 
   const supabase = await createClient();
   let adminSupabase: ReturnType<typeof createAdminClient>;
@@ -407,7 +415,7 @@ export async function POST(request: Request) {
       ...graph,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to generate sitemap.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    logServerError("sitemap.generate.failed", error);
+    return NextResponse.json({ error: "Unable to generate sitemap." }, { status: 500 });
   }
 }

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { rateLimitByRequest } from "@/utils/rate-limit";
 import { createClient } from "@/utils/supabase/server";
+import { validateJsonPayloadSize, validatePdfFiles, validateTextLength } from "@/utils/validation";
 
 type SaveSitemapRequest = {
   brief?: unknown;
@@ -42,6 +44,8 @@ export async function PATCH(
 ) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "sitemaps:update", { limit: 80, windowMs: 60_000 });
+  if (limited) return limited;
 
   const { id } = await context.params;
   const contentType = request.headers.get("content-type") ?? "";
@@ -58,12 +62,11 @@ export async function PATCH(
     const brief = String(formData.get("brief") ?? "").trim();
     const pdf = formData.get("pdf");
     let pdfText = "";
+    const files = pdf instanceof File && pdf.size > 0 ? [pdf] : [];
+    const pdfValidationError = validatePdfFiles(files);
+    if (pdfValidationError) return pdfValidationError;
 
     if (pdf instanceof File && pdf.size > 0) {
-      if (pdf.type !== "application/pdf") {
-        return NextResponse.json({ error: "Upload must be a PDF file." }, { status: 400 });
-      }
-
       try {
         pdfText = await extractPdfText(pdf);
       } catch (error) {
@@ -76,6 +79,8 @@ export async function PATCH(
       .filter(Boolean)
       .join("\n\n")
       .trim();
+    const briefError = validateTextLength(combinedBrief, "Brief");
+    if (briefError) return briefError;
 
     const supabase = await createClient();
     const { error } = await supabase
@@ -107,6 +112,10 @@ export async function PATCH(
       { status: 400 },
     );
   }
+  const payloadSizeError = validateJsonPayloadSize(body, "Sitemap");
+  if (payloadSizeError) return payloadSizeError;
+  const briefError = typeof body.brief === "string" ? validateTextLength(body.brief, "Brief") : null;
+  if (briefError) return briefError;
 
   const supabase = await createClient();
   const updatePayload: {

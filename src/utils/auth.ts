@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/utils/supabase/server";
+import { logServerError } from "@/utils/server-log";
 
 export type AppRole = "superadmin" | "employee";
 
@@ -87,10 +88,15 @@ export async function requireApiRole(allowedRoles: AppRole[]) {
   const auth = await getAuthContext();
 
   if (!auth) {
+    logServerError("auth.api.unauthenticated", new Error("Authentication required"));
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
 
   if (!allowedRoles.includes(auth.role)) {
+    logServerError("auth.api.forbidden", new Error("Insufficient permissions"), {
+      role: auth.role,
+      userId: auth.userId,
+    });
     return NextResponse.json({ error: "Insufficient permissions." }, { status: 403 });
   }
 

@@ -2,7 +2,17 @@ import { openai } from "@ai-sdk/openai";
 import { generateText } from "ai";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { requireEnv } from "@/utils/env";
+import {
+  ensureProjectDocumentsBucket,
+  PROJECT_DOCUMENTS_BUCKET,
+  toClientProjectDocument,
+  type ClientProjectDocument,
+} from "@/utils/project-documents";
+import { rateLimitByRequest } from "@/utils/rate-limit";
+import { logServerError } from "@/utils/server-log";
 import { createAdminClient } from "@/utils/supabase/server";
+import { validateJsonPayloadSize, validatePdfFiles, validateTextLength } from "@/utils/validation";
 
 export const runtime = "nodejs";
 
@@ -25,11 +35,15 @@ type ProjectContext = Partial<ProjectDetails> & {
 };
 
 type ProjectDocumentRow = {
+  analysis_error: string | null;
+  analysis_status: "uploaded" | "processing" | "ready" | "failed" | null;
+  analysis_summary: string | null;
   file_name: string;
   file_size: number | null;
   id: string;
   mime_type: string | null;
-  public_url: string;
+  openai_file_id: string | null;
+  openai_vector_store_id: string | null;
   storage_path: string;
 };
 
@@ -70,8 +84,6 @@ const EDITABLE_FIELDS: EditableField[] = [
   "additional_details",
   "staging_base_url",
 ];
-
-const PROJECT_DOCUMENTS_BUCKET = "project-briefs";
 
 const FIELD_LABELS: Record<EditableField, string> = {
   additional_details: "Additional Details",
@@ -212,24 +224,22 @@ function removeLeadingFieldLabel(value: string, field: EditableField) {
   return value.replace(new RegExp(`^\\s*(?:${label}|${field})\\s*:\\s*`, "i"), "").trim();
 }
 
-function toClientDocument(document: ProjectDocumentRow) {
+async function uploadedDocumentToClient(document: UploadedProjectDocument) {
   return {
-    fileName: document.file_name,
-    fileSize: document.file_size ?? 0,
-    id: document.id,
-    mimeType: document.mime_type ?? "application/pdf",
-    publicUrl: document.public_url,
-    storagePath: document.storage_path,
-  };
-}
-
-function uploadedDocumentToClient(document: UploadedProjectDocument) {
-  return {
+    analysisError: null,
+    analysisStatus: "uploaded" as const,
+    analysisSummary: null,
     fileName: document.file_name,
     fileSize: document.file_size,
     id: document.storage_path,
     mimeType: document.mime_type,
-    publicUrl: document.public_url,
+    signedUrl: await toClientProjectDocument({
+      file_name: document.file_name,
+      file_size: document.file_size,
+      mime_type: document.mime_type,
+      analysis_status: "uploaded",
+      storage_path: document.storage_path,
+    }).then((clientDocument) => clientDocument.signedUrl),
     storagePath: document.storage_path,
   };
 }
@@ -250,7 +260,7 @@ async function updateFallbackDocuments({
   projectId,
   removeStoragePath,
 }: {
-  documents?: ReturnType<typeof uploadedDocumentToClient>[];
+  documents?: ClientProjectDocument[];
   projectId: string;
   removeStoragePath?: string;
 }) {
@@ -322,17 +332,6 @@ async function extractPdfText(file: File) {
   }
 }
 
-async function ensureProjectDocumentsBucket() {
-  const supabase = createAdminClient();
-  const { error } = await supabase.storage.createBucket(PROJECT_DOCUMENTS_BUCKET, {
-    public: true,
-  });
-
-  if (error && !/already exists|Duplicate/i.test(error.message)) {
-    throw new Error(error.message);
-  }
-}
-
 function appendPdfExtracts(currentBrief: string, extracts: string[]) {
   return [currentBrief.trim(), ...extracts].filter(Boolean).join("\n\n").trim();
 }
@@ -373,14 +372,12 @@ async function uploadProjectDocuments({
       throw new Error(uploadError.message);
     }
 
-    const { data } = supabase.storage.from(PROJECT_DOCUMENTS_BUCKET).getPublicUrl(storagePath);
-
     documents.push({
       file_name: file.name || `Brief ${index + 1}.pdf`,
       file_size: file.size,
       mime_type: file.type || "application/pdf",
       project_id: projectId,
-      public_url: data.publicUrl,
+      public_url: "",
       storage_path: storagePath,
     });
   }
@@ -388,10 +385,12 @@ async function uploadProjectDocuments({
   const { data, error } = await supabase
     .from("project_documents")
     .insert(documents)
-    .select("id,file_name,file_size,mime_type,public_url,storage_path");
+    .select(
+      "id,file_name,file_size,mime_type,storage_path,analysis_status,analysis_summary,analysis_error,openai_file_id,openai_vector_store_id",
+    );
 
   if (error) {
-    const clientDocuments = documents.map(uploadedDocumentToClient);
+    const clientDocuments = await Promise.all(documents.map(uploadedDocumentToClient));
 
     if (isMissingTableError(error)) {
       await updateFallbackDocuments({ documents: clientDocuments, projectId });
@@ -404,7 +403,7 @@ async function uploadProjectDocuments({
     throw new Error(error.message);
   }
 
-  return ((data ?? []) as ProjectDocumentRow[]).map(toClientDocument);
+  return Promise.all(((data ?? []) as ProjectDocumentRow[]).map(toClientProjectDocument));
 }
 
 async function getSystemPrompt(name: string) {
@@ -432,16 +431,14 @@ async function handleUploadDocuments(request: Request, projectId: string) {
     .getAll("pdf")
     .filter((value): value is File => value instanceof File && value.size > 0);
   const pdfExtracts: string[] = [];
+  const pdfValidationError = validatePdfFiles(files);
+  if (pdfValidationError) return pdfValidationError;
 
   if (files.length === 0) {
     return NextResponse.json({ error: "Choose at least one PDF to upload." }, { status: 400 });
   }
 
   for (const file of files) {
-    if (file.type && file.type !== "application/pdf") {
-      return NextResponse.json({ error: "Upload must be a PDF file." }, { status: 400 });
-    }
-
     const text = await extractPdfText(file);
     if (text) {
       pdfExtracts.push(`PDF brief extract from ${file.name || "uploaded brief"}:\n${text}`);
@@ -490,6 +487,8 @@ export async function PATCH(
 ) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "projects:patch", { limit: 80, windowMs: 60_000 });
+  if (limited) return limited;
 
   const { id } = await context.params;
   let body: SaveRequest;
@@ -509,6 +508,13 @@ export async function PATCH(
   const dateError = normalizeDateDetails(details);
   if (dateError) {
     return NextResponse.json({ error: dateError }, { status: 400 });
+  }
+  const payloadSizeError = validateJsonPayloadSize(body, "Project details");
+  if (payloadSizeError) return payloadSizeError;
+
+  for (const field of EDITABLE_FIELDS) {
+    const textError = validateTextLength(details[field], FIELD_LABELS[field]);
+    if (textError) return textError;
   }
 
   const supabase = createAdminClient();
@@ -554,6 +560,8 @@ export async function POST(
 ) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "projects:post", { limit: 30, windowMs: 60_000 });
+  if (limited) return limited;
 
   const { id } = await context.params;
   const contentType = request.headers.get("content-type") ?? "";
@@ -562,9 +570,8 @@ export async function POST(
     try {
       return await handleUploadDocuments(request, id);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to upload project documents.";
-      return NextResponse.json({ error: message }, { status: 500 });
+      logServerError("project.documents.upload.failed", error, { projectId: id });
+      return NextResponse.json({ error: "Unable to upload project documents." }, { status: 500 });
     }
   }
 
@@ -590,6 +597,9 @@ export async function POST(
   if (!isEditableField(field)) {
     return NextResponse.json({ error: "A valid editable field is required." }, { status: 400 });
   }
+  const payloadSizeError = validateJsonPayloadSize(body, "Project refinement request");
+  if (payloadSizeError) return payloadSizeError;
+  requireEnv("openai");
 
   try {
     const systemPrompt = await getSystemPrompt("project_detail_refiner");
@@ -607,8 +617,8 @@ export async function POST(
 
     return NextResponse.json({ field, value: removeLeadingFieldLabel(result.text, field) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to refine project detail.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    logServerError("project.detail.refine.failed", error, { projectId: id });
+    return NextResponse.json({ error: "Unable to refine project detail." }, { status: 500 });
   }
 }
 
@@ -628,6 +638,8 @@ export async function DELETE(
   if (body.action === "delete-project") {
     const authError = await requireApiRole(["superadmin"]);
     if (authError) return authError;
+    const limited = rateLimitByRequest(request, "projects:delete", { limit: 20, windowMs: 60_000 });
+    if (limited) return limited;
 
     const supabase = createAdminClient();
     const { data: documents, error: documentsError } = await supabase
@@ -658,6 +670,8 @@ export async function DELETE(
 
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "documents:delete", { limit: 40, windowMs: 60_000 });
+  if (limited) return limited;
 
   if (body.action !== "delete-document") {
     return NextResponse.json({ error: "Unsupported project action." }, { status: 400 });

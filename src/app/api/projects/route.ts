@@ -3,7 +3,10 @@ import { generateObject, jsonSchema } from "ai";
 import type { JSONSchema7 } from "ai";
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
+import { logServerError } from "@/utils/server-log";
+import { rateLimitByRequest } from "@/utils/rate-limit";
 import { createAdminClient } from "@/utils/supabase/server";
+import { validateTextLength } from "@/utils/validation";
 
 export const runtime = "nodejs";
 
@@ -27,16 +30,6 @@ const strategyJsonSchema: JSONSchema7 = {
 };
 
 const strategySchema = jsonSchema<ProjectStrategy>(strategyJsonSchema);
-
-const PROJECT_DOCUMENTS_BUCKET = "project-briefs";
-
-type ProjectDocument = {
-  file_name: string;
-  file_size: number;
-  mime_type: string;
-  public_url: string;
-  storage_path: string;
-};
 
 function buildStrategyPrompt({
   additionalDetails,
@@ -112,6 +105,30 @@ function parseProjectStrategy(value: unknown): ProjectStrategy {
   return { industry, summary, usp, strategy_sheet };
 }
 
+function buildFallbackProjectStrategy({
+  additionalDetails,
+  brief,
+  name,
+}: {
+  additionalDetails: string;
+  brief: string;
+  name: string;
+}): ProjectStrategy {
+  const context = [brief, additionalDetails].filter(Boolean).join("\n\n").trim();
+  const summary =
+    context.length > 0
+      ? context.slice(0, 700)
+      : `${name} project workspace created without AI-generated strategy.`;
+
+  return {
+    industry: "Not specified",
+    summary,
+    usp: "To be refined",
+    strategy_sheet:
+      "AI strategy generation was unavailable, so this project was created with the submitted brief. Review and refine the project strategy from the project overview.",
+  };
+}
+
 function extractResponseText(payload: unknown) {
   if (!isRecord(payload)) {
     return "";
@@ -165,19 +182,6 @@ function addOneYearDate(value: string) {
 
 function todayDate() {
   return new Date().toISOString().slice(0, 10);
-}
-
-async function extractPdfText(file: File) {
-  const buffer = Buffer.from(await file.arrayBuffer());
-  const { PDFParse } = await import("pdf-parse");
-  const parser = new PDFParse({ data: buffer });
-
-  try {
-    const parsed = await parser.getText();
-    return parsed.text.trim();
-  } finally {
-    await parser.destroy();
-  }
 }
 
 async function getSystemPrompt(name: string) {
@@ -315,6 +319,37 @@ async function generateProjectStrategy({
   });
 }
 
+async function generateProjectStrategyOrFallback({
+  additionalDetails,
+  brief,
+  name,
+  systemPrompt,
+}: {
+  additionalDetails: string;
+  brief: string;
+  name: string;
+  systemPrompt: string;
+}) {
+  try {
+    return {
+      strategy: await generateProjectStrategy({
+        additionalDetails,
+        brief,
+        name,
+        systemPrompt,
+      }),
+      usedFallbackStrategy: false,
+    };
+  } catch (error) {
+    logServerError("project.strategy.generate.failed", error, { projectName: name });
+
+    return {
+      strategy: buildFallbackProjectStrategy({ additionalDetails, brief, name }),
+      usedFallbackStrategy: true,
+    };
+  }
+}
+
 async function insertProject({
   additionalDetails,
   brief,
@@ -384,99 +419,14 @@ async function insertProject({
   return { projectId: fallback.data.id as string, usedFallbackContext: true, strategyPayload };
 }
 
-async function ensureProjectDocumentsBucket() {
-  const supabase = createAdminClient();
-  const { error } = await supabase.storage.createBucket(PROJECT_DOCUMENTS_BUCKET, {
-    public: true,
-  });
-
-  if (error && !/already exists|Duplicate/i.test(error.message)) {
-    throw new Error(error.message);
-  }
-}
-
-async function uploadProjectDocuments({
-  files,
-  projectId,
-}: {
-  files: File[];
-  projectId: string;
-}) {
-  if (files.length === 0) return [];
-
-  await ensureProjectDocumentsBucket();
-
-  const supabase = createAdminClient();
-  const documents: ProjectDocument[] = [];
-
-  for (const [index, file] of files.entries()) {
-    const extension = file.name.split(".").pop()?.toLowerCase() || "pdf";
-    const storagePath = `${projectId}/${Date.now()}-${index}-${crypto.randomUUID()}.${extension}`;
-    const { error: uploadError } = await supabase.storage
-      .from(PROJECT_DOCUMENTS_BUCKET)
-      .upload(storagePath, file, {
-        contentType: file.type || "application/pdf",
-        upsert: false,
-      });
-
-    if (uploadError) {
-      throw new Error(uploadError.message);
-    }
-
-    const { data } = supabase.storage.from(PROJECT_DOCUMENTS_BUCKET).getPublicUrl(storagePath);
-
-    documents.push({
-      file_name: file.name || `Brief ${index + 1}.pdf`,
-      file_size: file.size,
-      mime_type: file.type || "application/pdf",
-      public_url: data.publicUrl,
-      storage_path: storagePath,
-    });
-  }
-
-  return documents;
-}
-
-async function saveProjectDocuments({
-  documents,
-  projectId,
-  strategyPayload,
-}: {
-  documents: ProjectDocument[];
-  projectId: string;
-  strategyPayload: Record<string, string>;
-}) {
-  if (documents.length === 0) return;
-
-  const supabase = createAdminClient();
-  const rows = documents.map((document) => ({
-    ...document,
-    project_id: projectId,
-  }));
-  const { error } = await supabase.from("project_documents").insert(rows);
-
-  if (!error) return;
-
-  if (!/Could not find the table|schema cache|relation .* does not exist/i.test(error.message)) {
-    throw new Error(error.message);
-  }
-
-  await supabase.from("sitemaps").insert({
-    brief: JSON.stringify({
-      ...strategyPayload,
-      __type: "project_context",
-      documents,
-    }),
-    edges: [],
-    nodes: [],
-    project_id: projectId,
-    updated_at: new Date().toISOString(),
-  });
-}
-
 export async function POST(request: Request) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
+  const limited = rateLimitByRequest(request, "projects:create", {
+    limit: 12,
+    windowMs: 60_000,
+  });
+  if (limited) return limited;
 
   let formData: FormData;
 
@@ -489,12 +439,9 @@ export async function POST(request: Request) {
   const name = String(formData.get("name") ?? "").trim();
   const briefText = String(formData.get("brief") ?? "").trim();
   const additionalDetails = String(formData.get("additional_details") ?? "").trim();
+  const hasDocuments = String(formData.get("has_documents") ?? "") === "true";
   const stagingBaseUrl = String(formData.get("staging_base_url") ?? "").trim();
   const startDate = String(formData.get("start_date") ?? "").trim() || todayDate();
-  const pdfs = formData
-    .getAll("pdf")
-    .filter((value): value is File => value instanceof File && value.size > 0);
-  const pdfExtracts: string[] = [];
 
   if (!name) {
     return NextResponse.json({ error: "Project name is required." }, { status: 400 });
@@ -504,37 +451,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Start date must be a valid date." }, { status: 400 });
   }
 
-  for (const pdf of pdfs) {
-    if (pdf.type && pdf.type !== "application/pdf") {
-      return NextResponse.json({ error: "Upload must be a PDF file." }, { status: 400 });
-    }
-
-    try {
-      const text = await extractPdfText(pdf);
-      if (text) {
-        pdfExtracts.push(`PDF brief extract from ${pdf.name || "uploaded brief"}:\n${text}`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to parse PDF brief.";
-      return NextResponse.json({ error: message }, { status: 400 });
-    }
+  for (const [value, label] of [
+    [name, "Project name"],
+    [briefText, "Brief text"],
+    [additionalDetails, "Additional details"],
+  ] as const) {
+    const textError = validateTextLength(value, label);
+    if (textError) return textError;
   }
 
-  const brief = [briefText, ...pdfExtracts]
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-
-  if (!brief && !additionalDetails) {
-    return NextResponse.json(
-      { error: "Add brief text, additional details, or upload a PDF." },
-      { status: 400 },
-    );
-  }
+  const brief =
+    briefText ||
+    (hasDocuments
+      ? "PDF brief uploaded. AI document analysis is pending."
+      : "No formal brief provided.");
 
   try {
     const systemPrompt = await getSystemPrompt("project_strategy_generator");
-    const strategy = await generateProjectStrategy({
+    const { strategy, usedFallbackStrategy } = await generateProjectStrategyOrFallback({
       additionalDetails,
       brief,
       name,
@@ -548,23 +482,20 @@ export async function POST(request: Request) {
       startDate,
       strategy,
     });
-    const documents = await uploadProjectDocuments({
-      files: pdfs,
-      projectId: project.projectId,
-    });
-    await saveProjectDocuments({
-      documents,
-      projectId: project.projectId,
-      strategyPayload: project.strategyPayload,
-    });
-
     if (request.headers.get("accept")?.includes("text/html")) {
       return NextResponse.redirect(new URL(`/projects/${project.projectId}`, request.url), 303);
     }
 
-    return NextResponse.json({ ...project, documents, strategy });
+    return NextResponse.json({
+      ...project,
+      documents: [],
+      strategy,
+      warning: usedFallbackStrategy
+        ? "Project created, but AI strategy generation was unavailable. Review and refine the strategy from the project overview."
+        : undefined,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to create project.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    logServerError("project.create.failed", error);
+    return NextResponse.json({ error: "Unable to create project." }, { status: 500 });
   }
 }

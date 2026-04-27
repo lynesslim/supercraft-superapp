@@ -1,8 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { requireEnv } from '@/utils/env'
 
 export async function createClient() {
+  requireEnv('supabase')
   const cookieStore = await cookies()
 
   return createServerClient(
@@ -30,6 +32,7 @@ export async function createClient() {
 }
 
 export function createAdminClient() {
+  requireEnv('supabaseAdmin')
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!serviceRoleKey) {
