@@ -68,6 +68,7 @@ type SaveSitemapResponse = {
 };
 
 export type ProjectOption = {
+  hasIncompleteDocuments?: boolean;
   id: string;
   name: string;
   sitemapId?: string;
@@ -87,6 +88,7 @@ type SitemapGraphProps = {
   initialCopies?: PageCopy[];
   initialEdges?: Edge[];
   initialNodes?: Node<SitemapNodeData>[];
+  initialProjectHasIncompleteDocuments?: boolean;
   initialProjectId?: string;
   initialProjectName?: string;
   initialProjects?: ProjectOption[];
@@ -182,6 +184,11 @@ function SitemapNode({ data, id, selected }: NodeProps<Node<CanvasNodeData>>) {
             Edit
           </button>
         </div>
+        {!isRoot && data.purpose ? (
+          <p className="mt-2 line-clamp-3 text-[10px] leading-4 text-white/45">
+            {data.purpose}
+          </p>
+        ) : null}
       </div>
 
       {/* Sub-sections */}
@@ -627,6 +634,7 @@ export default function SitemapGraph({
   initialCopies = [],
   initialEdges = [],
   initialNodes = [],
+  initialProjectHasIncompleteDocuments = false,
   initialProjectId = "",
   initialProjectName = "Sitemap Canvas",
   initialProjects = [],
@@ -718,6 +726,11 @@ export default function SitemapGraph({
   const hasUnsavedCopy = selectedPath ? dirtyPaths.has(selectedPath) : false;
   const hasCopy = Boolean(draft.trim() || selectedCopy?.content);
   const hasProjectContext = Boolean(brief.trim());
+  const activeProject = projectId
+    ? projectOptions.find((project) => project.id === projectId)
+    : undefined;
+  const hasIncompleteProjectDocuments =
+    Boolean(projectId) && (activeProject?.hasIncompleteDocuments ?? initialProjectHasIncompleteDocuments);
   const isRootSelected = selectedNode?.id === ROOT_ID;
   const sitemapLoadingMessages = pdf ? SITEMAP_PDF_LOADING_MESSAGES : SITEMAP_LOADING_MESSAGES;
   const sitemapLoadingText = isGenerating
@@ -997,6 +1010,7 @@ export default function SitemapGraph({
           position: nodePosition,
           data: {
             title,
+            purpose: "",
             path: `/${id}`,
             sections: ["Menu", "Hero", "Footer"],
           },
@@ -1184,6 +1198,7 @@ export default function SitemapGraph({
             data: {
               ...existing.data,
               title,
+              purpose: existing.data.purpose ?? "",
               path: existing.data.path === "/" ? "/" : `/${slugify(title)}`,
             },
           }
@@ -1193,6 +1208,7 @@ export default function SitemapGraph({
             position: { x: 0, y: 0 },
             data: {
               title,
+              purpose: "",
               path: `/${slugify(title)}`,
               sections: [],
             },
@@ -1643,13 +1659,18 @@ export default function SitemapGraph({
   }
 
   function generateSitemap() {
+    if (hasIncompleteProjectDocuments) {
+      setNotice("PDF analysis must finish before generating a sitemap.");
+      return;
+    }
+
     startGenerating(async () => {
       setSitemapLoadingIndex(0);
       setNotice(sitemapLoadingMessages[0]);
       const formData = new FormData();
       formData.append("brief", brief);
       if (projectId) formData.append("projectId", projectId);
-      if (pdf) formData.append("pdf", pdf);
+      if (!projectId && pdf) formData.append("pdf", pdf);
 
       const response = await fetch("/api/sitemaps/generate", {
         method: "POST",
@@ -2013,12 +2034,21 @@ export default function SitemapGraph({
 
                 <button
                   className="motion-lift mt-3 w-full rounded-full bg-[#a3b840] px-4 py-2.5 text-xs font-bold tracking-wide text-[#1a1c16] shadow-lg shadow-[#a3b840]/20 transition hover:bg-[#b5cc4a] active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={isGenerating || (!brief.trim() && !pdf)}
+                  disabled={
+                    isGenerating ||
+                    hasIncompleteProjectDocuments ||
+                    (!brief.trim() && !pdf)
+                  }
                   onClick={generateSitemap}
                   type="button"
                 >
                   {isGenerating ? "Generating..." : "Generate Sitemap"}
                 </button>
+                {hasIncompleteProjectDocuments ? (
+                  <p className="mt-2 rounded-xl border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-center text-[11px] font-medium text-amber-100">
+                    PDF analysis must finish before generating a sitemap.
+                  </p>
+                ) : null}
 
                 {sitemapLoadingText && (
                   <p className="motion-status-pulse mt-2 rounded-xl border border-[#a3b840]/15 bg-[#a3b840]/8 px-3 py-2 text-center text-[11px] font-medium text-[#c8db5a]">
@@ -2133,6 +2163,22 @@ export default function SitemapGraph({
                     onFocus={pushHistory}
                     value={selectedNode.data.title}
                   />
+
+                  {selectedNode.id !== ROOT_ID ? (
+                    <>
+                      <label className="mt-3 block text-xs font-semibold text-white/55" htmlFor="purpose">
+                        Purpose
+                      </label>
+                      <textarea
+                        className="mt-1.5 min-h-20 w-full resize-y rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-xs leading-5 text-[#e8eae0] outline-none focus:border-[#a3b840]/50"
+                        id="purpose"
+                        onChange={(e) => updateSelectedNode("purpose", e.target.value)}
+                        onFocus={pushHistory}
+                        placeholder="High-level intent for this page"
+                        value={selectedNode.data.purpose ?? ""}
+                      />
+                    </>
+                  ) : null}
 
                   <label className="mt-3 block text-xs font-semibold text-white/55" htmlFor="path">
                     URL path

@@ -20,10 +20,11 @@ import type { DashboardProject } from "./page";
 const PAGE_SIZE = 20;
 const MAX_LARGE_PDF_BYTES = 60 * 1024 * 1024;
 const MAX_LARGE_PDF_FILES = 4;
+const PDF_ANALYSIS_TOAST_STORAGE_KEY = "supercraft:pdf-analysis-toast-project";
+const PDF_UPLOAD_COMPLETE_STORAGE_KEY = "supercraft:pdf-upload-complete-project";
+const PDF_UPLOAD_EVENT = "supercraft:project-pdfs-uploaded";
 const CREATE_LOADING_MESSAGES = [
   "Creating project workspace...",
-  "Uploading PDF briefs...",
-  "Analyzing uploaded PDF briefs...",
   "Preparing project overview...",
 ];
 
@@ -141,18 +142,6 @@ async function uploadProjectPdfDocuments(projectId: string, files: File[]) {
   }
 }
 
-async function analyzeProjectPdfDocuments(projectId: string, attempts: number) {
-  for (let index = 0; index < attempts; index += 1) {
-    const response = await fetch(`/api/projects/${projectId}/documents/analyze`, {
-      method: "POST",
-    }).catch(() => null);
-
-    if (!response?.ok) {
-      return;
-    }
-  }
-}
-
 function CreateProjectModal({
   onClose,
   open,
@@ -213,8 +202,26 @@ function CreateProjectModal({
         return;
       }
 
-      await uploadProjectPdfDocuments(data.projectId, pdfs);
-      await analyzeProjectPdfDocuments(data.projectId, pdfs.length);
+      if (pdfs.length > 0) {
+        window.sessionStorage.setItem(PDF_ANALYSIS_TOAST_STORAGE_KEY, data.projectId);
+        void uploadProjectPdfDocuments(data.projectId, pdfs)
+          .then(() => {
+            window.sessionStorage.setItem(PDF_UPLOAD_COMPLETE_STORAGE_KEY, data.projectId!);
+            window.dispatchEvent(
+              new CustomEvent(PDF_UPLOAD_EVENT, { detail: { projectId: data.projectId } }),
+            );
+          })
+          .catch((error) => {
+            window.dispatchEvent(
+              new CustomEvent(PDF_UPLOAD_EVENT, {
+                detail: {
+                  error: error instanceof Error ? error.message : "Unable to upload PDF documents.",
+                  projectId: data.projectId,
+                },
+              }),
+            );
+          });
+      }
 
       router.push(`/projects/${data.projectId}`);
       router.refresh();

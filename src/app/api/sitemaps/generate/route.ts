@@ -25,10 +25,11 @@ const sitemapSchema = jsonSchema<GeneratedSitemap>({
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "title", "path", "parentId"],
+        required: ["id", "title", "purpose", "path", "parentId"],
         properties: {
           id: { type: "string" },
           title: { type: "string" },
+          purpose: { type: "string" },
           path: { type: "string" },
           parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
         },
@@ -59,6 +60,7 @@ function normalizePages(pages: SitemapPage[]) {
     return {
       id,
       title: page.title?.trim() || `Page ${index + 1}`,
+      purpose: page.purpose?.trim() || "",
       path: page.path?.startsWith("/") ? page.path : `/${slugify(page.path || page.title)}`,
       parentId: page.parentId ? slugify(page.parentId) : null,
     };
@@ -69,6 +71,7 @@ const NODE_WIDTH = 220;
 const NODE_H_GAP = 40;
 const NODE_V_GAP = 180;
 const ROOT_ID = "sitemap-root";
+const PDF_ANALYSIS_REQUIRED_MESSAGE = "PDF analysis must finish before generating a sitemap.";
 
 function toFlowGraph(pages: SitemapPage[]) {
   // Build children map. Top-level pages (parentId null) attach to ROOT_ID.
@@ -129,6 +132,7 @@ function toFlowGraph(pages: SitemapPage[]) {
     position: positions.get(page.id) ?? { x: 0, y: 0 },
     data: {
       title: page.title,
+      purpose: page.purpose,
       path: page.path,
       sections: [],
     },
@@ -294,6 +298,33 @@ async function getProjectContextBrief({
   return parseProjectContext(contextRow?.brief);
 }
 
+async function validateProjectDocumentsReady({
+  projectId,
+  supabase,
+}: {
+  projectId: FormDataEntryValue | null;
+  supabase: ReturnType<typeof createAdminClient>;
+}) {
+  if (typeof projectId !== "string" || !projectId.trim()) return null;
+
+  const { data, error } = await supabase
+    .from("project_documents")
+    .select("analysis_status")
+    .eq("project_id", projectId.trim());
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  const hasIncompleteDocument = (data ?? []).some(
+    (document) => document.analysis_status !== "ready",
+  );
+
+  if (!hasIncompleteDocument) return null;
+
+  return NextResponse.json({ error: PDF_ANALYSIS_REQUIRED_MESSAGE }, { status: 409 });
+}
+
 export async function POST(request: Request) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;
@@ -317,6 +348,21 @@ export async function POST(request: Request) {
   const pdfValidationError = validatePdfFiles(files);
   if (pdfValidationError) return pdfValidationError;
 
+  let adminSupabase: ReturnType<typeof createAdminClient>;
+
+  try {
+    adminSupabase = createAdminClient();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Missing Supabase admin client.";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+
+  const projectDocumentsError = await validateProjectDocumentsReady({
+    projectId: requestedProjectId,
+    supabase: adminSupabase,
+  });
+  if (projectDocumentsError) return projectDocumentsError;
+
   if (pdf instanceof File && pdf.size > 0) {
     try {
       pdfText = await extractPdfText(pdf);
@@ -334,14 +380,6 @@ export async function POST(request: Request) {
   if (briefError) return briefError;
 
   const supabase = await createClient();
-  let adminSupabase: ReturnType<typeof createAdminClient>;
-
-  try {
-    adminSupabase = createAdminClient();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Missing Supabase admin client.";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
 
   if (!combinedBrief) {
     combinedBrief = await getProjectContextBrief({

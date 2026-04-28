@@ -88,13 +88,13 @@ function parseAnalysis(value: unknown): DocumentAnalysis {
 }
 
 function buildAnalysisPrompt({
-  documentName,
+  documents,
   project,
 }: {
-  documentName: string;
+  documents: ProjectDocumentRow[];
   project: ProjectRow;
 }) {
-  return `Analyze this private project brief PDF for a website planning workflow.
+  return `Analyze these private project brief PDFs together for a website planning workflow.
 
 Project name:
 ${project.name || "Untitled project"}
@@ -102,10 +102,10 @@ ${project.name || "Untitled project"}
 Existing brief/details:
 ${[project.brief, project.additional_details].filter(Boolean).join("\n\n") || "No existing brief text."}
 
-Document:
-${documentName}
+Documents:
+${documents.map((document) => `- ${document.file_name}`).join("\n")}
 
-Return a compact, useful project strategy. Summarize only information supported by the document and existing brief.`;
+Return one compact, useful consolidated project strategy. Synthesize across all documents and existing brief. Summarize only information supported by the documents and existing brief.`;
 }
 
 async function getSystemPrompt(name: string) {
@@ -127,12 +127,12 @@ async function getSystemPrompt(name: string) {
   return data.prompt_text.trim();
 }
 
-async function analyzeDocumentWithOpenAI({
-  document,
+async function analyzeDocumentsWithOpenAI({
+  documents,
   project,
   systemPrompt,
 }: {
-  document: ProjectDocumentRow;
+  documents: ProjectDocumentRow[];
   project: ProjectRow;
   systemPrompt: string;
 }) {
@@ -142,7 +142,9 @@ async function analyzeDocumentWithOpenAI({
     throw new Error("OpenAI API key is not configured.");
   }
 
-  const signedUrl = await createSignedDocumentUrl(document.storage_path);
+  const signedUrls = await Promise.all(
+    documents.map((document) => createSignedDocumentUrl(document.storage_path)),
+  );
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -155,8 +157,8 @@ async function analyzeDocumentWithOpenAI({
         {
           role: "user",
           content: [
-            { type: "input_text", text: buildAnalysisPrompt({ documentName: document.file_name, project }) },
-            { type: "input_file", file_url: signedUrl },
+            { type: "input_text", text: buildAnalysisPrompt({ documents, project }) },
+            ...signedUrls.map((signedUrl) => ({ type: "input_file", file_url: signedUrl })),
           ],
         },
       ],
@@ -192,12 +194,12 @@ async function analyzeDocumentWithOpenAI({
   return parseAnalysis(JSON.parse(text));
 }
 
-function combineBrief(currentBrief: string, documentName: string, analysis: DocumentAnalysis) {
-  const marker = `AI document summary from ${documentName}:`;
+function combineBrief(currentBrief: string, analysis: DocumentAnalysis) {
+  const marker = "AI document summary from uploaded PDFs:";
   const stripped = currentBrief
     .replace(
       new RegExp(
-        `(?:^|\\n\\n)${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n\\nAI document summary from |$)`,
+        `(?:^|\\n\\n)AI document summary from [\\s\\S]*?(?=\\n\\nAI document summary from |$)`,
         "g",
       ),
       "",
@@ -243,18 +245,19 @@ export async function POST(
       .select("id,file_name,storage_path,analysis_status")
       .eq("project_id", projectId)
       .in("analysis_status", ["uploaded", "failed"])
-      .order("created_at", { ascending: true })
-      .limit(1);
+      .order("created_at", { ascending: true });
 
     if (documentsError) {
       throw new Error(documentsError.message);
     }
 
-    const document = ((documents ?? []) as ProjectDocumentRow[])[0];
+    const pendingDocuments = (documents ?? []) as ProjectDocumentRow[];
 
-    if (!document) {
+    if (pendingDocuments.length === 0) {
       return NextResponse.json({ message: "No uploaded documents are waiting for analysis." });
     }
+
+    const pendingDocumentIds = pendingDocuments.map((document) => document.id);
 
     await supabase
       .from("project_documents")
@@ -262,16 +265,16 @@ export async function POST(
         analysis_error: null,
         analysis_status: "processing",
       })
-      .eq("id", document.id)
-      .eq("project_id", projectId);
+      .eq("project_id", projectId)
+      .in("id", pendingDocumentIds);
 
     try {
-      const analysis = await analyzeDocumentWithOpenAI({
-        document,
+      const analysis = await analyzeDocumentsWithOpenAI({
+        documents: pendingDocuments,
         project: project as ProjectRow,
         systemPrompt: await getSystemPrompt("project_strategy_generator"),
       });
-      const nextBrief = combineBrief(String(project.brief ?? ""), document.file_name, analysis);
+      const nextBrief = combineBrief(String(project.brief ?? ""), analysis);
 
       await supabase
         .from("project_documents")
@@ -281,8 +284,8 @@ export async function POST(
           analysis_summary: analysis.summary,
           analyzed_at: new Date().toISOString(),
         })
-        .eq("id", document.id)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .in("id", pendingDocumentIds);
 
       const { data: updatedProject, error: updateError } = await supabase
         .from("projects")
@@ -305,7 +308,7 @@ export async function POST(
       return NextResponse.json({
         analysis,
         details: updatedProject,
-        documentId: document.id,
+        documentIds: pendingDocumentIds,
         status: "ready",
       });
     } catch (error) {
@@ -319,14 +322,17 @@ export async function POST(
           analysis_status: "failed",
           analyzed_at: new Date().toISOString(),
         })
-        .eq("id", document.id)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .in("id", pendingDocumentIds);
 
-      logServerError("project.document.analysis.failed", error, { documentId: document.id, projectId });
+      logServerError("project.document.analysis.failed", error, {
+        documentIds: pendingDocumentIds.join(","),
+        projectId,
+      });
 
       return NextResponse.json(
         {
-          documentId: document.id,
+          documentIds: pendingDocumentIds,
           error: "Document uploaded, AI analysis unavailable.",
           status: "failed",
         },

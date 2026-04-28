@@ -129,6 +129,21 @@ function buildFallbackProjectStrategy({
   };
 }
 
+function buildPendingPdfProjectStrategy(): ProjectStrategy {
+  return {
+    industry: "Pending PDF analysis",
+    summary: "PDF analysis is pending.",
+    usp: "Pending PDF analysis",
+    strategy_sheet: "PDF analysis is pending.",
+  };
+}
+
+function buildPendingPdfBrief(briefText: string) {
+  return [briefText, "PDF brief uploaded. AI document analysis is pending."]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 function extractResponseText(payload: unknown) {
   if (!isRecord(payload)) {
     return "";
@@ -460,27 +475,26 @@ export async function POST(request: Request) {
     if (textError) return textError;
   }
 
-  const brief =
-    briefText ||
-    (hasDocuments
-      ? "PDF brief uploaded. AI document analysis is pending."
-      : "No formal brief provided.");
+  const brief = hasDocuments
+    ? buildPendingPdfBrief(briefText)
+    : briefText || "No formal brief provided.";
 
   try {
-    const systemPrompt = await getSystemPrompt("project_strategy_generator");
-    const { strategy, usedFallbackStrategy } = await generateProjectStrategyOrFallback({
-      additionalDetails,
-      brief,
-      name,
-      systemPrompt,
-    });
+    const strategyResult = hasDocuments
+      ? { strategy: buildPendingPdfProjectStrategy(), usedFallbackStrategy: false }
+      : await generateProjectStrategyOrFallback({
+          additionalDetails,
+          brief,
+          name,
+          systemPrompt: await getSystemPrompt("project_strategy_generator"),
+        });
     const project = await insertProject({
       additionalDetails,
       brief,
       name,
       stagingBaseUrl,
       startDate,
-      strategy,
+      strategy: strategyResult.strategy,
     });
     if (request.headers.get("accept")?.includes("text/html")) {
       return NextResponse.redirect(new URL(`/projects/${project.projectId}`, request.url), 303);
@@ -489,9 +503,11 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ...project,
       documents: [],
-      strategy,
-      warning: usedFallbackStrategy
+      strategy: strategyResult.strategy,
+      warning: strategyResult.usedFallbackStrategy
         ? "Project created, but AI strategy generation was unavailable. Review and refine the strategy from the project overview."
+        : hasDocuments
+          ? "Project created. PDF analysis is running in the background."
         : undefined,
     });
   } catch (error) {

@@ -14,9 +14,14 @@ const fallbackPrompts: PromptRow[] = [
   {
     name: "sitemap_generator",
     prompt_text:
-      "You are an expert UX designer and content strategist. Given project context, create a premium website sitemap. Return only the structured sitemap object required by the schema. Use stable kebab-case ids. Use null parentId for top-level pages. Pages should be practical, conversion-aware, and useful for the project strategy.",
+      "You are an expert UX designer and content strategist. Given project context, create a premium website sitemap. Return only the structured sitemap object required by the schema. Use stable kebab-case ids. Use null parentId for top-level pages. Pages should be practical, conversion-aware, and useful for the project strategy. For every page, include a purpose field that explains the high-level page intent in 1-2 concise sentences. Purpose is not a section list.",
   },
-{
+  {
+    name: "style_guide_generator",
+    prompt_text:
+      "You are a senior brand and website copy director. Create a practical style guide for consistent website copy based on the supplied project details. Include voice, tone, messaging principles, CTA style, terminology, do/don't guidance, and formatting preferences. Return plain text only.",
+  },
+  {
     name: "webcopy_refinement",
     prompt_text:
       "You are editing Markdown website copy. Return only the revised Markdown text requested, with no preamble. Mode meanings: regenerate means regenerate the full page copy; regenerate-selection means rewrite only the selected excerpt; paraphrase means preserve meaning with new wording; shorten means keep the core message in fewer words; expand means add useful specific detail; change-tone means apply the feedback tone; bullet-points means convert the selected excerpt into concise Markdown bullet points. For selection tasks, return only the rewritten selected excerpt and do not include surrounding page titles, labels, or context unless they are inside the selected text. If the selected excerpt does not begin with a Markdown heading, do not begin with a heading.",
@@ -32,6 +37,8 @@ const samples = {
     "Project name: TS Tyre Autocare. Brief: Tyre and car servicing workshop. Goal: improve trust, explain services clearly, and drive WhatsApp enquiries.",
   project_detail_refiner:
     "Field: USP. Current value: Reliable tyre and autocare workshop. Feedback: make it sharper, more premium, and more specific.",
+  style_guide_generator:
+    "Project name: Atelier Sora\nSummary: Boutique Singapore architecture studio for refined private homes and boutique developments.\nIndustry: Architecture and interior design\nUSP: Quietly luxurious spaces shaped around craft, restraint, and client lifestyle.\nStrategy sheet: Audience is affluent homeowners and developers. Tone should feel calm, precise, premium, and grounded. Conversion goal is consultation enquiries.\nSitemap: Home, Residential Architecture, Process, Portfolio, About, Contact.",
   webcopy_refinement:
     "Selected text: Our tyre services are fast and affordable. Task: make it more premium, specific, and trustworthy while keeping it short.",
 };
@@ -40,6 +47,7 @@ const promptLabels: Record<string, string> = {
   project_strategy_generator: "Project Strategist",
   project_detail_refiner: "Project Detail Refiner",
   sitemap_generator: "Sitemap Architect",
+  style_guide_generator: "Style Guide Director",
   webcopy_refinement: "Copy Refiner",
   webcopy_generator: "Webcopy Director",
 };

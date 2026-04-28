@@ -1,6 +1,7 @@
 export type SitemapPage = {
   id: string;
   title: string;
+  purpose?: string;
   path: string;
   parentId?: string | null;
   sections?: string[];
@@ -14,6 +15,7 @@ export type GeneratedSitemap = {
 
 export type SitemapNodeData = {
   title: string;
+  purpose?: string;
   path: string;
   sections?: string[];
 };

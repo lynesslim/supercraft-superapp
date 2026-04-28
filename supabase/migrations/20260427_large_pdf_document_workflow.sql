@@ -23,4 +23,4 @@ UPDATE storage.buckets
 SET public = false,
     file_size_limit = 62914560,
     allowed_mime_types = ARRAY['application/pdf']::text[]
-WHERE id = 'project-briefs';
+WHERE id = 'project-brief

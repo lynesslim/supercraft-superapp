@@ -11,9 +11,27 @@ import type { SitemapNodeData } from "@/types/sitemap";
 
 export const runtime = "nodejs";
 
+type SitemapEdge = {
+  id?: string;
+  source: string;
+  target: string;
+};
+
 type SitemapNode = {
   id: string;
   data: SitemapNodeData;
+};
+
+type ProjectRow = {
+  additional_details: string | null;
+  brief: string | null;
+  id: string;
+  industry: string | null;
+  name: string | null;
+  strategy_sheet: string | null;
+  style_guide: string | null;
+  summary: string | null;
+  usp: string | null;
 };
 
 type RefineMode =
@@ -51,6 +69,13 @@ function isSitemapNode(value: unknown): value is SitemapNode {
     typeof node.data?.title === "string" &&
     typeof node.data?.path === "string"
   );
+}
+
+function isSitemapEdge(value: unknown): value is SitemapEdge {
+  if (!value || typeof value !== "object") return false;
+
+  const edge = value as { source?: unknown; target?: unknown };
+  return typeof edge.source === "string" && typeof edge.target === "string";
 }
 
 async function saveCopy({
@@ -113,18 +138,166 @@ async function saveCopy({
   return data;
 }
 
-function buildPagePrompt({
-  brief,
-  page,
+function projectDetailsToContext(project: ProjectRow | null, fallbackBrief: string) {
+  if (!project) return fallbackBrief;
+
+  return [
+    project.name && `Project name: ${project.name}`,
+    project.summary && `Summary:\n${project.summary}`,
+    project.industry && `Industry:\n${project.industry}`,
+    project.usp && `USP:\n${project.usp}`,
+    project.strategy_sheet && `Strategy sheet:\n${project.strategy_sheet}`,
+    project.brief && `Brief:\n${project.brief}`,
+    project.additional_details && `Additional details:\n${project.additional_details}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n") || fallbackBrief;
+}
+
+function buildChildrenMap(nodes: SitemapNode[], edges: SitemapEdge[]) {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const children = new Map<string, string[]>();
+  for (const node of nodes) children.set(node.id, []);
+
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    children.get(edge.source)?.push(edge.target);
+  }
+
+  return children;
+}
+
+function buildSitemapContext(nodes: SitemapNode[], edges: SitemapEdge[]) {
+  if (nodes.length === 0) return "No sitemap pages available.";
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const children = buildChildrenMap(nodes, edges);
+  const targetIds = new Set(edges.map((edge) => edge.target));
+  const roots = nodes.filter((node) => !targetIds.has(node.id));
+  const orderedRoots = roots.length > 0 ? roots : [nodes[0]];
+  const visited = new Set<string>();
+  const lines: string[] = [];
+
+  function visit(node: SitemapNode, depth: number) {
+    if (visited.has(node.id)) return;
+    visited.add(node.id);
+
+    const indent = "  ".repeat(depth);
+    const sections = (node.data.sections ?? []).join(", ") || "Not specified";
+    lines.push(`${indent}- ${node.data.title} (${node.data.path})`);
+    if (node.data.purpose?.trim()) {
+      lines.push(`${indent}  Purpose: ${node.data.purpose.trim()}`);
+    }
+    lines.push(`${indent}  Sections: ${sections}`);
+
+    for (const childId of children.get(node.id) ?? []) {
+      const child = nodeById.get(childId);
+      if (child) visit(child, depth + 1);
+    }
+  }
+
+  orderedRoots.forEach((node) => visit(node, 0));
+  nodes.filter((node) => !visited.has(node.id)).forEach((node) => visit(node, 0));
+
+  return lines.join("\n");
+}
+
+function buildStyleGuidePrompt({
+  projectContext,
+  sitemapContext,
 }: {
-  brief: string;
+  projectContext: string;
+  sitemapContext: string;
+}) {
+  return `Project details:
+${projectContext || "No project details available."}
+
+Current sitemap:
+${sitemapContext}`;
+}
+
+async function ensureProjectStyleGuide({
+  project,
+  projectContext,
+  sitemapContext,
+  supabase,
+}: {
+  project: ProjectRow | null;
+  projectContext: string;
+  sitemapContext: string;
+  supabase: Awaited<ReturnType<typeof createClient>>;
+}) {
+  if (!project?.id) {
+    throw new Error("Project details are required to generate a style guide.");
+  }
+
+  if (project.style_guide?.trim()) {
+    return project.style_guide.trim();
+  }
+
+  const { data: prompt, error: promptError } = await supabase
+    .from("system_prompts")
+    .select("prompt_text")
+    .eq("name", "style_guide_generator")
+    .single();
+
+  if (promptError || !prompt?.prompt_text) {
+    throw new Error(promptError?.message ?? "Missing style_guide_generator system prompt.");
+  }
+
+  const result = await generateText({
+    model: openai("gpt-4o-mini"),
+    system: prompt.prompt_text,
+    prompt: buildStyleGuidePrompt({ projectContext, sitemapContext }),
+    temperature: 0.35,
+    maxOutputTokens: 1800,
+  });
+  const styleGuide = result.text.trim();
+
+  if (!styleGuide) {
+    throw new Error("Style guide generation returned no content.");
+  }
+
+  const styleGuideError = validateTextLength(styleGuide, "Style guide");
+  if (styleGuideError) {
+    throw new Error("Generated style guide is too long.");
+  }
+
+  const { error: updateError } = await supabase
+    .from("projects")
+    .update({ style_guide: styleGuide, updated_at: new Date().toISOString() })
+    .eq("id", project.id);
+
+  if (updateError) {
+    throw new Error(updateError.message);
+  }
+
+  return styleGuide;
+}
+
+function buildPagePrompt({
+  projectContext,
+  sitemapContext,
+  page,
+  styleGuide,
+}: {
+  projectContext: string;
+  sitemapContext: string;
   page: SitemapNode;
+  styleGuide: string;
 }) {
   return `Project context:
-${brief || "No project brief was saved for this sitemap."}
+${projectContext || "No project context was saved for this sitemap."}
+
+Style guide:
+${styleGuide}
+
+Full sitemap context:
+${sitemapContext}
 
 Page context:
 - Title: ${page.data.title}
+- Purpose: ${page.data.purpose?.trim() || "Not specified"}
 - Path: ${page.data.path}
 - Sections: ${(page.data.sections ?? []).join(", ") || "Not specified"}`;
 }
@@ -134,16 +307,32 @@ function buildRefinePrompt({
   feedback,
   mode,
   page,
+  projectContext,
+  sitemapContext,
   selectedText,
+  styleGuide,
 }: {
   currentContent: string;
   feedback?: string;
   mode: RefineMode;
   page: SitemapNode;
+  projectContext: string;
+  sitemapContext: string;
   selectedText?: string;
+  styleGuide: string;
 }) {
-  return `Page:
+  return `Project context:
+${projectContext || "No project context was saved for this sitemap."}
+
+Style guide:
+${styleGuide}
+
+Full sitemap context:
+${sitemapContext}
+
+Page:
 - Title: ${page.data.title}
+- Purpose: ${page.data.purpose?.trim() || "Not specified"}
 - Path: ${page.data.path}
 - Sections: ${(page.data.sections ?? []).join(", ") || "Not specified"}
 
@@ -230,7 +419,7 @@ export async function POST(
 
   const { data: sitemap, error: sitemapError } = await supabase
     .from("sitemaps")
-    .select("brief,nodes")
+    .select("brief,edges,nodes,project_id")
     .eq("id", id)
     .single();
 
@@ -244,6 +433,9 @@ export async function POST(
   const nodes = Array.isArray(sitemap.nodes)
     ? sitemap.nodes.filter(isSitemapNode)
     : [];
+  const edges = Array.isArray(sitemap.edges)
+    ? sitemap.edges.filter(isSitemapEdge)
+    : [];
   const selectedNodes = body.pageId
     ? nodes.filter((node) => node.id === body.pageId)
     : nodes;
@@ -253,6 +445,29 @@ export async function POST(
       { error: "No matching sitemap page nodes were found." },
       { status: 400 },
     );
+  }
+
+  const { data: project } = sitemap.project_id
+    ? await supabase
+        .from("projects")
+        .select("id,name,summary,industry,usp,strategy_sheet,brief,additional_details,style_guide")
+        .eq("id", sitemap.project_id)
+        .maybeSingle()
+    : { data: null };
+  const projectContext = projectDetailsToContext((project ?? null) as ProjectRow | null, sitemap.brief ?? "");
+  const sitemapContext = buildSitemapContext(nodes, edges);
+  let styleGuide: string;
+
+  try {
+    styleGuide = await ensureProjectStyleGuide({
+      project: (project ?? null) as ProjectRow | null,
+      projectContext,
+      sitemapContext,
+      supabase,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to generate project style guide.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   const { data: prompt, error: promptError } = await supabase
@@ -299,7 +514,10 @@ export async function POST(
           feedback: body.feedback,
           mode,
           page,
+          projectContext,
+          sitemapContext,
           selectedText: body.selectedText,
+          styleGuide,
         }),
         temperature: 0.4,
         maxOutputTokens: mode === "regenerate" ? 2200 : 700,
@@ -323,8 +541,10 @@ export async function POST(
         model: openai("gpt-4o-mini"),
         system: prompt.prompt_text,
         prompt: buildPagePrompt({
-          brief: sitemap.brief ?? "",
+          projectContext,
+          sitemapContext,
           page,
+          styleGuide,
         }),
         temperature: 0.45,
         maxOutputTokens: 2200,

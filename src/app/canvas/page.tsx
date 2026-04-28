@@ -39,6 +39,11 @@ type ProjectContext = {
   __type?: string;
 };
 
+type ProjectDocumentStatusRow = {
+  analysis_status: string | null;
+  project_id: string;
+};
+
 function isSitemapNode(value: unknown): value is Node<SitemapNodeData> {
   if (!value || typeof value !== "object") return false;
 
@@ -108,7 +113,7 @@ export default async function CanvasPage({ searchParams }: CanvasPageProps) {
   const { id, projectId } = await searchParams;
   const supabase = createAdminClient();
 
-  const [{ data: projects }, { data: sitemapSummaries }] = await Promise.all([
+  const [{ data: projects }, { data: sitemapSummaries }, { data: documentStatuses }] = await Promise.all([
     supabase
       .from("projects")
       .select("id,name,created_at,summary,industry,usp,strategy_sheet,brief,additional_details")
@@ -117,12 +122,21 @@ export default async function CanvasPage({ searchParams }: CanvasPageProps) {
       .from("sitemaps")
       .select("id,project_id,brief,nodes,updated_at")
       .order("updated_at", { ascending: false }),
+    supabase.from("project_documents").select("project_id,analysis_status"),
   ]);
 
   const projectRows = (projects ?? []) as ProjectRow[];
   const sitemapRows = (sitemapSummaries ?? []) as SitemapSummaryRow[];
+  const documentStatusRows = (documentStatuses ?? []) as ProjectDocumentStatusRow[];
   const latestSitemapByProject = new Map<string, string>();
   const projectContextByProject = new Map<string, ProjectContext>();
+  const hasIncompleteDocumentsByProject = new Map<string, boolean>();
+
+  for (const document of documentStatusRows) {
+    if (document.analysis_status !== "ready") {
+      hasIncompleteDocumentsByProject.set(document.project_id, true);
+    }
+  }
 
   for (const sitemap of sitemapRows) {
     const nodes = Array.isArray(sitemap.nodes) ? sitemap.nodes : [];
@@ -139,6 +153,7 @@ export default async function CanvasPage({ searchParams }: CanvasPageProps) {
 
   const projectOptions: ProjectOption[] = projectRows
     .map((project) => ({
+      hasIncompleteDocuments: hasIncompleteDocumentsByProject.get(project.id) ?? false,
       id: project.id,
       name: project.name?.trim() || "Untitled project",
       sitemapId: latestSitemapByProject.get(project.id),
@@ -166,6 +181,9 @@ export default async function CanvasPage({ searchParams }: CanvasPageProps) {
       <SitemapGraph
         initialBrief={projectContext}
         initialProjectId={projectId ?? ""}
+        initialProjectHasIncompleteDocuments={
+          projectId ? hasIncompleteDocumentsByProject.get(projectId) ?? false : false
+        }
         initialProjectName={
           projectId ? projectNameById.get(projectId) ?? "Sitemap Canvas" : "Sitemap Canvas"
         }
@@ -205,6 +223,9 @@ export default async function CanvasPage({ searchParams }: CanvasPageProps) {
       initialEdges={Array.isArray(sitemap.edges) ? sitemap.edges.filter(isSitemapEdge) : []}
       initialNodes={Array.isArray(sitemap.nodes) ? sitemap.nodes.filter(isSitemapNode) : []}
       initialProjectId={sitemap.project_id ?? ""}
+      initialProjectHasIncompleteDocuments={
+        sitemap.project_id ? hasIncompleteDocumentsByProject.get(sitemap.project_id) ?? false : false
+      }
       initialProjectName={projectNameById.get(sitemap.project_id) ?? "Sitemap Canvas"}
       initialProjects={projectOptions}
       initialSitemapId={sitemap.id}
