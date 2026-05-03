@@ -56,3 +56,16 @@ test("large PDF workflow uses private signed upload and analysis statuses", asyn
   assert.match(uploadRoute, /createSignedUploadUrl/);
   assert.match(analyzeRoute, /Document uploaded, AI analysis unavailable/);
 });
+
+test("webcopy generation uses extracted PDF text as guided context", async () => {
+  const copyRoute = await readFile(
+    new URL("../src/app/api/sitemaps/[id]/copies/route.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(copyRoute, /Sitemap brief and extracted PDF text/);
+  assert.match(copyRoute, /PDF-derived context instructions/);
+  assert.match(copyRoute, /Treat extracted PDF text as business-understanding guidance/);
+  assert.match(copyRoute, /origin story, founder\/background, company history/);
+  assert.doesNotMatch(copyRoute, /attached PDF/i);
+});

@@ -166,6 +166,12 @@ function isDocumentAnalysisPending(document: ProjectDocument) {
   return document.analysisStatus === "uploaded" || document.analysisStatus === "processing";
 }
 
+function normalizeDetails(details: ProjectDetails): ProjectDetails {
+  return Object.fromEntries(
+    Object.entries(details).map(([key, value]) => [key, value ?? ""]),
+  ) as ProjectDetails;
+}
+
 export default function ProjectDetailClient({
   canvasHref,
   initialCopies,
@@ -228,73 +234,70 @@ export default function ProjectDetailClient({
     () => documents.filter(isDocumentAnalysisPending).map(getDocumentKey),
     [documents],
   );
-  const analyzeDocuments = useCallback(async (attempts = 1) => {
+  const analyzeDocuments = useCallback(async (attempts = 1, reanalyze = false) => {
     setIsAnalyzingDocuments(true);
     setNotice("Analyzing uploaded PDF...");
     setToast({ tone: "info", message: "PDF analysis is running in the background." });
 
     try {
-      let analyzedCount = 0;
-
-      for (let index = 0; index < attempts; index += 1) {
-        const response = await fetch(`/api/projects/${projectId}/documents/analyze`, {
+      const response = await fetch(
+        `/api/projects/${projectId}/documents/analyze${reanalyze ? "?reanalyze=true" : ""}`,
+        {
           method: "POST",
-        });
-        const data = (await response.json()) as {
-          details?: ProjectDetails;
-          documentId?: string;
-          documentIds?: string[];
-          error?: string;
-          status?: ProjectDocument["analysisStatus"];
-        };
-        const affectedDocumentIds = data.documentIds ?? (data.documentId ? [data.documentId] : []);
+        },
+      );
+      const data = (await response.json()) as {
+        details?: ProjectDetails;
+        documentId?: string;
+        documentIds?: string[];
+        error?: string;
+        status?: ProjectDocument["analysisStatus"];
+      };
+      const affectedDocumentIds = data.documentIds ?? (data.documentId ? [data.documentId] : []);
 
-        if (!response.ok) {
-          if (affectedDocumentIds.length > 0) {
-            setDocuments((current) =>
-              current.map((document) =>
-                document.id && affectedDocumentIds.includes(document.id)
-                  ? {
-                      ...document,
-                      analysisError: data.error ?? "Document uploaded, AI analysis unavailable.",
-                      analysisStatus: "failed",
-                    }
-                  : document,
-              ),
-            );
-          }
-          setNotice(data.error ?? "Document uploaded, AI analysis unavailable.");
-          setToast({
-            tone: "error",
-            message: data.error ?? "PDF analysis failed. Retry analysis or remove the PDF.",
-          });
-          return;
-        }
-
-        if (affectedDocumentIds.length > 0 && data.status) {
+      if (!response.ok) {
+        if (affectedDocumentIds.length > 0) {
           setDocuments((current) =>
             current.map((document) =>
               document.id && affectedDocumentIds.includes(document.id)
                 ? {
                     ...document,
-                    analysisError: null,
-                    analysisStatus: data.status ?? "ready",
+                    analysisError: data.error ?? "Document uploaded, AI analysis unavailable.",
+                    analysisStatus: "failed",
                   }
                 : document,
             ),
           );
         }
-
-        if (data.details) {
-          setSavedDetails(data.details);
-          setDraftDetails(data.details);
-          analyzedCount += 1;
-        }
-
-        if (affectedDocumentIds.length === 0) {
-          break;
-        }
+        setNotice(data.error ?? "Document uploaded, AI analysis unavailable.");
+        setToast({
+          tone: "error",
+          message: data.error ?? "PDF analysis failed. Retry analysis or remove the PDF.",
+        });
+        return;
       }
+
+      if (affectedDocumentIds.length > 0 && data.status) {
+        setDocuments((current) =>
+          current.map((document) =>
+            document.id && affectedDocumentIds.includes(document.id)
+              ? {
+                  ...document,
+                  analysisError: null,
+                  analysisStatus: data.status ?? "ready",
+                }
+              : document,
+          ),
+        );
+      }
+
+      if (data.details) {
+        const details = normalizeDetails(data.details);
+        setSavedDetails(details);
+        setDraftDetails(details);
+      }
+
+      const analyzedCount = data.details ? affectedDocumentIds.length || attempts : 0;
 
       setNotice(
         analyzedCount > 0
@@ -308,6 +311,7 @@ export default function ProjectDetailClient({
             ? "PDF analysis completed and project overview updated."
             : "No uploaded documents are waiting for analysis.",
       });
+      router.refresh();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Document uploaded, AI analysis unavailable.";
       setNotice(message);
@@ -315,7 +319,7 @@ export default function ProjectDetailClient({
     } finally {
       setIsAnalyzingDocuments(false);
     }
-  }, [projectId]);
+  }, [projectId, router]);
   const didStartInitialAnalysisRef = useRef(false);
 
   useEffect(() => {
@@ -521,9 +525,8 @@ export default function ProjectDetailClient({
 
     try {
       const supabase = createClient();
-      const uploadedDocuments: ProjectDocument[] = [];
 
-      for (const file of selectedFiles) {
+      const uploadedDocuments = await Promise.all(selectedFiles.map(async (file) => {
         const prepareResponse = await fetch(`/api/projects/${projectId}/documents/upload-url`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -541,8 +544,7 @@ export default function ProjectDetailClient({
         };
 
         if (!prepareResponse.ok || !prepareData.path || !prepareData.token || !prepareData.document) {
-          setNotice(prepareData.error ?? "Unable to prepare PDF upload.");
-          return;
+          throw new Error(prepareData.error ?? "Unable to prepare PDF upload.");
         }
 
         const { error } = await supabase.storage
@@ -564,8 +566,8 @@ export default function ProjectDetailClient({
           throw new Error(error.message);
         }
 
-        uploadedDocuments.push(prepareData.document);
-      }
+        return prepareData.document;
+      }));
 
       setDocuments((current) => [...uploadedDocuments, ...current]);
       setNotice("PDF uploaded. Analysis is running in the background.");
@@ -765,19 +767,16 @@ export default function ProjectDetailClient({
                     <h2 className="text-sm font-bold text-[#f4f6ea]">Documents</h2>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {documents.some((document) =>
-                      ["uploaded", "failed"].includes(document.analysisStatus),
-                    ) ? (
+                    {documents.length > 0 ? (
                       <button
                         className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/8 px-3 py-2 text-xs font-bold text-white/65 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a] disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={isAnalyzingDocuments}
-                        onClick={() =>
-                          void analyzeDocuments(
-                            documents.filter((document) =>
-                              ["uploaded", "failed"].includes(document.analysisStatus),
-                            ).length,
-                          )
-                        }
+                        onClick={() => {
+                          const pendingCount = documents.filter((document) =>
+                            ["uploaded", "failed"].includes(document.analysisStatus),
+                          ).length;
+                          void analyzeDocuments(pendingCount || documents.length, pendingCount === 0);
+                        }}
                         type="button"
                       >
                         {isAnalyzingDocuments ? (
@@ -785,7 +784,13 @@ export default function ProjectDetailClient({
                         ) : (
                           <RefreshCw size={14} />
                         )}
-                        {isAnalyzingDocuments ? "Analyzing..." : "Analyze PDF"}
+                        {isAnalyzingDocuments
+                          ? "Analyzing..."
+                          : documents.some((document) =>
+                                ["uploaded", "failed"].includes(document.analysisStatus),
+                              )
+                            ? "Analyze PDF"
+                            : "Re-analyze PDF"}
                       </button>
                     ) : null}
                     {isEditing ? (

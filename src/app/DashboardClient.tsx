@@ -63,7 +63,6 @@ function includesSearch(project: DashboardProject, query: string) {
 function matchesFilter(project: DashboardProject, filter: string) {
   if (filter === "with-sitemap") return Boolean(project.latestSitemap);
   if (filter === "needs-sitemap") return !project.latestSitemap;
-  if (filter === "with-copy") return project.copyCount > 0;
   return true;
 }
 
@@ -95,7 +94,7 @@ async function uploadProjectPdfDocuments(projectId: string, files: File[]) {
 
   const supabase = createClient();
 
-  for (const file of files) {
+  await Promise.all(files.map(async (file) => {
     const prepareResponse = await fetch(`/api/projects/${projectId}/documents/upload-url`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -139,7 +138,7 @@ async function uploadProjectPdfDocuments(projectId: string, files: File[]) {
       }
       throw new Error(error.message);
     }
-  }
+  }));
 }
 
 function CreateProjectModal({
@@ -373,6 +372,7 @@ export default function DashboardClient({
   const [page, setPage] = useState(1);
   const [query, setQuery] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [openingHref, setOpeningHref] = useState("");
   const [projectToDelete, setProjectToDelete] = useState<DashboardProject | null>(null);
 
   const normalizedQuery = query.trim();
@@ -453,6 +453,12 @@ export default function DashboardClient({
               {notice}
             </p>
           )}
+          {openingHref ? (
+            <p className="motion-pop mt-2 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/55">
+              <Loader2 aria-hidden="true" className="animate-spin" size={13} />
+              Opening page...
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -477,7 +483,6 @@ export default function DashboardClient({
             <option value="all">All projects</option>
             <option value="with-sitemap">With sitemap</option>
             <option value="needs-sitemap">Needs sitemap</option>
-            <option value="with-copy">With copy</option>
           </select>
           <button
             className="motion-lift inline-flex h-10 items-center gap-2 rounded-lg bg-[#a3b840] px-3 text-sm font-bold text-[#111310] transition hover:bg-[#c8db5a]"
@@ -491,13 +496,12 @@ export default function DashboardClient({
       </div>
 
       <div className="canvas-scrollbar min-h-0 flex-1 overflow-auto">
-        <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[980px] border-collapse text-left text-sm">
           <thead className="sticky top-0 z-10 bg-[#111310] text-xs uppercase tracking-[0.14em] text-white/35">
             <tr>
               <th className="px-4 py-3 font-semibold">Project</th>
               <th className="px-4 py-3 font-semibold">Industry</th>
               <th className="px-4 py-3 font-semibold">Pages</th>
-              <th className="px-4 py-3 font-semibold">Copy</th>
               <th className="px-4 py-3 font-semibold">Updated</th>
               <th className="px-4 py-3 font-semibold">Start</th>
               <th className="px-4 py-3 font-semibold">Expiry</th>
@@ -518,11 +522,17 @@ export default function DashboardClient({
                   className="group motion-lift cursor-pointer transition hover:bg-white/[0.03]"
                   style={{ animationDelay: `${index * 50}ms` }}
                   key={project.id}
-                  onClick={() => router.push(`/projects/${project.id}`)}
+                  onClick={() => {
+                    const href = `/projects/${project.id}`;
+                    setOpeningHref(href);
+                    router.push(href);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      router.push(`/projects/${project.id}`);
+                      const href = `/projects/${project.id}`;
+                      setOpeningHref(href);
+                      router.push(href);
                     }
                   }}
                   tabIndex={0}
@@ -531,6 +541,10 @@ export default function DashboardClient({
                     <Link
                       className="font-semibold text-[#f3f4ec] transition hover:text-[#c8db5a]"
                       href={`/projects/${project.id}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setOpeningHref(`/projects/${project.id}`);
+                      }}
                     >
                       {project.name}
                     </Link>
@@ -540,7 +554,6 @@ export default function DashboardClient({
                   </td>
                   <td className="px-4 py-4 text-white/60">{project.industry ?? "Not set"}</td>
                   <td className="px-4 py-4 font-semibold text-[#e8eae0]">{project.pageCount}</td>
-                  <td className="px-4 py-4 font-semibold text-[#e8eae0]">{project.copyCount}</td>
                   <td className="px-4 py-4 text-white/60">{formatDate(project.updatedAt)}</td>
                   <td className="px-4 py-4 text-white/60">{formatDate(project.startDate)}</td>
                   <td className="px-4 py-4 text-white/60">{formatDate(project.expiryDate)}</td>
@@ -578,7 +591,10 @@ export default function DashboardClient({
                         aria-label={`Open details for ${project.name}`}
                         className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 text-white/60 transition hover:border-[#a3b840]/35 hover:text-[#c8db5a]"
                         href={`/projects/${project.id}`}
-                        onClick={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOpeningHref(`/projects/${project.id}`);
+                        }}
                         title="Details"
                       >
                         <FileText aria-hidden="true" size={16} />
@@ -587,7 +603,10 @@ export default function DashboardClient({
                         aria-label={`Open canvas for ${project.name}`}
                         className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-white/8 text-white/65 transition hover:bg-[#a3b840] hover:text-[#111310]"
                         href={canvasHref}
-                        onClick={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOpeningHref(canvasHref);
+                        }}
                         title="Canvas"
                       >
                         <ExternalLink aria-hidden="true" size={16} />

@@ -21,12 +21,7 @@ type SitemapRow = {
   updated_at?: string | null;
 };
 
-type CopyCountRow = {
-  sitemap_id: string;
-};
-
 export type DashboardProject = {
-  copyCount: number;
   createdAt?: string | null;
   embedPublicKey: string;
   id: string;
@@ -119,28 +114,11 @@ async function getDashboardProjects() {
     }
   }
 
-  const latestSitemapIds = [...latestSitemapByProject.values()].map((sitemap) => sitemap.id);
-  const copyCountBySitemap = new Map<string, number>();
-
-  if (latestSitemapIds.length > 0) {
-    const { data: copyRows, error: copyError } = await supabase
-      .from("page_copies")
-      .select("sitemap_id")
-      .in("sitemap_id", latestSitemapIds);
-
-    if (copyError) throw new Error(copyError.message);
-
-    for (const copy of (copyRows ?? []) as CopyCountRow[]) {
-      copyCountBySitemap.set(copy.sitemap_id, (copyCountBySitemap.get(copy.sitemap_id) ?? 0) + 1);
-    }
-  }
-
   return projectRows.map<DashboardProject>((project) => {
     const latestSitemap = latestSitemapByProject.get(project.id);
     const context = contextByProject.get(project.id);
 
     return {
-      copyCount: latestSitemap ? copyCountBySitemap.get(latestSitemap.id) ?? 0 : 0,
       createdAt: project.created_at,
       embedPublicKey: project.embed_public_key?.trim() || "Not generated",
       id: project.id,
@@ -184,8 +162,8 @@ export default async function Home() {
   }
 
   const totalPages = projects.reduce((sum, project) => sum + project.pageCount, 0);
-  const totalCopies = projects.reduce((sum, project) => sum + project.copyCount, 0);
   const activeProjects = projects.filter((project) => project.latestSitemap).length;
+  const projectsNeedingSitemap = projects.length - activeProjects;
 
   return (
     <main className="motion-fade-in min-h-screen bg-[#111310] px-4 py-5 text-[#e8eae0] sm:px-6 lg:px-8">
@@ -210,7 +188,7 @@ export default async function Home() {
                 <Metric label="Projects" value={String(projects.length)} />
                 <Metric label="With sitemap" value={String(activeProjects)} />
                 <Metric label="Pages" value={String(totalPages)} />
-                <Metric label="Copy drafts" value={String(totalCopies)} />
+                <Metric label="Needs sitemap" value={String(projectsNeedingSitemap)} />
               </div>
             </div>
           </header>

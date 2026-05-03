@@ -12,17 +12,19 @@ type CanvasPageProps = {
 type ProjectRow = {
   id: string;
   name: string | null;
-  created_at: string;
+  created_at?: string;
   additional_details?: string | null;
   brief?: string | null;
   industry?: string | null;
   summary?: string | null;
   strategy_sheet?: string | null;
   usp?: string | null;
+  style_guide?: string | null;
 };
 
 type SitemapSummaryRow = {
   brief?: string | null;
+  edges?: unknown;
   id: string;
   nodes?: unknown;
   project_id: string;
@@ -41,7 +43,6 @@ type ProjectContext = {
 
 type ProjectDocumentStatusRow = {
   analysis_status: string | null;
-  project_id: string;
 };
 
 function isSitemapNode(value: unknown): value is Node<SitemapNodeData> {
@@ -108,97 +109,138 @@ function projectRowToBrief(project: ProjectRow | undefined, fallback?: ProjectCo
     .join("\n\n") || projectContextToBrief(fallback ?? null);
 }
 
+async function getProjectRow(
+  supabase: ReturnType<typeof createAdminClient>,
+  projectId: string,
+) {
+  const { data } = await supabase
+    .from("projects")
+    .select("id,name,summary,industry,usp,strategy_sheet,brief,additional_details,style_guide")
+    .eq("id", projectId)
+    .maybeSingle();
+
+  return (data ?? undefined) as ProjectRow | undefined;
+}
+
+async function getLatestSitemapForProject(
+  supabase: ReturnType<typeof createAdminClient>,
+  projectId: string,
+) {
+  const { data } = await supabase
+    .from("sitemaps")
+    .select("id,project_id,brief,nodes,edges,updated_at")
+    .eq("project_id", projectId)
+    .order("updated_at", { ascending: false });
+
+  return ((data ?? []) as SitemapSummaryRow[]).find((row) => {
+    const nodes = Array.isArray(row.nodes) ? row.nodes : [];
+    return nodes.length > 0;
+  }) ?? null;
+}
+
+async function getProjectContext(
+  supabase: ReturnType<typeof createAdminClient>,
+  projectId: string,
+) {
+  const { data } = await supabase
+    .from("sitemaps")
+    .select("brief,nodes")
+    .eq("project_id", projectId)
+    .order("updated_at", { ascending: false });
+
+  for (const sitemap of (data ?? []) as SitemapSummaryRow[]) {
+    const nodes = Array.isArray(sitemap.nodes) ? sitemap.nodes : [];
+    const context = nodes.length === 0 ? parseProjectContext(sitemap.brief) : null;
+    if (context) return context;
+  }
+
+  return null;
+}
+
+async function hasIncompleteProjectDocuments(
+  supabase: ReturnType<typeof createAdminClient>,
+  projectId?: string,
+) {
+  if (!projectId) return false;
+
+  const { data } = await supabase
+    .from("project_documents")
+    .select("analysis_status")
+    .eq("project_id", projectId);
+
+  return ((data ?? []) as ProjectDocumentStatusRow[]).some(
+    (document) => document.analysis_status !== "ready",
+  );
+}
+
 export default async function CanvasPage({ searchParams }: CanvasPageProps) {
   await requirePageRole(["superadmin", "employee"]);
   const { id, projectId } = await searchParams;
   const supabase = createAdminClient();
 
-  const [{ data: projects }, { data: sitemapSummaries }, { data: documentStatuses }] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("id,name,created_at,summary,industry,usp,strategy_sheet,brief,additional_details")
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("sitemaps")
-      .select("id,project_id,brief,nodes,updated_at")
-      .order("updated_at", { ascending: false }),
-    supabase.from("project_documents").select("project_id,analysis_status"),
-  ]);
+  const { data: projects } = await supabase
+    .from("projects")
+    .select("id,name")
+    .order("created_at", { ascending: false });
 
   const projectRows = (projects ?? []) as ProjectRow[];
-  const sitemapRows = (sitemapSummaries ?? []) as SitemapSummaryRow[];
-  const documentStatusRows = (documentStatuses ?? []) as ProjectDocumentStatusRow[];
-  const latestSitemapByProject = new Map<string, string>();
-  const projectContextByProject = new Map<string, ProjectContext>();
-  const hasIncompleteDocumentsByProject = new Map<string, boolean>();
-
-  for (const document of documentStatusRows) {
-    if (document.analysis_status !== "ready") {
-      hasIncompleteDocumentsByProject.set(document.project_id, true);
-    }
-  }
-
-  for (const sitemap of sitemapRows) {
-    const nodes = Array.isArray(sitemap.nodes) ? sitemap.nodes : [];
-    const context = nodes.length === 0 ? parseProjectContext(sitemap.brief) : null;
-
-    if (context && !projectContextByProject.has(sitemap.project_id)) {
-      projectContextByProject.set(sitemap.project_id, context);
-    }
-
-    if (nodes.length > 0 && !latestSitemapByProject.has(sitemap.project_id)) {
-      latestSitemapByProject.set(sitemap.project_id, sitemap.id);
-    }
-  }
 
   const projectOptions: ProjectOption[] = projectRows
     .map((project) => ({
-      hasIncompleteDocuments: hasIncompleteDocumentsByProject.get(project.id) ?? false,
       id: project.id,
       name: project.name?.trim() || "Untitled project",
-      sitemapId: latestSitemapByProject.get(project.id),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    }));
 
   const projectNameById = new Map(projectOptions.map((project) => [project.id, project.name]));
-  const projectRowById = new Map(projectRows.map((project) => [project.id, project]));
   const selectedProject = projectId
     ? projectOptions.find((project) => project.id === projectId)
     : undefined;
-  const selectedSitemapId = id ?? selectedProject?.sitemapId ?? "";
 
   if (projectId && !selectedProject) {
     notFound();
   }
 
+  const latestProjectSitemap =
+    !id && projectId ? await getLatestSitemapForProject(supabase, projectId) : null;
+  const selectedSitemapId = id ?? latestProjectSitemap?.id ?? "";
+
   if (!selectedSitemapId) {
-    const context = projectId ? projectContextByProject.get(projectId) ?? null : null;
+    const [context, projectRow, hasIncompleteDocuments] = projectId
+      ? await Promise.all([
+          getProjectContext(supabase, projectId),
+          getProjectRow(supabase, projectId),
+          hasIncompleteProjectDocuments(supabase, projectId),
+        ])
+      : [null, undefined, false] as const;
+    const projectStyleGuide = projectRow?.style_guide ?? "";
     const projectContext = projectId
-      ? projectRowToBrief(projectRowById.get(projectId), context)
+      ? projectRowToBrief(projectRow, context)
       : "";
 
     return (
       <SitemapGraph
         initialBrief={projectContext}
         initialProjectId={projectId ?? ""}
-        initialProjectHasIncompleteDocuments={
-          projectId ? hasIncompleteDocumentsByProject.get(projectId) ?? false : false
-        }
+        initialProjectHasIncompleteDocuments={hasIncompleteDocuments}
         initialProjectName={
           projectId ? projectNameById.get(projectId) ?? "Sitemap Canvas" : "Sitemap Canvas"
         }
         initialProjects={projectOptions}
+        initialStyleGuide={projectStyleGuide}
         key={projectId ?? "new-canvas"}
       />
     );
   }
 
+  const sitemapResult = latestProjectSitemap
+    ? { data: latestProjectSitemap, error: null }
+    : await supabase
+        .from("sitemaps")
+        .select("id,project_id,brief,nodes,edges,updated_at")
+        .eq("id", selectedSitemapId)
+        .single();
   const [{ data: sitemap, error: sitemapError }, { data: copies }] = await Promise.all([
-    supabase
-      .from("sitemaps")
-      .select("id,project_id,brief,nodes,edges,updated_at")
-      .eq("id", selectedSitemapId)
-      .single(),
+    sitemapResult,
     supabase
       .from("page_copies")
       .select("id,page_name,url_path,content,updated_at")
@@ -210,25 +252,31 @@ export default async function CanvasPage({ searchParams }: CanvasPageProps) {
     notFound();
   }
 
+  const [sitemapProjectContext, sitemapProjectRow, sitemapHasIncompleteDocuments] =
+    await Promise.all([
+      getProjectContext(supabase, sitemap.project_id),
+      getProjectRow(supabase, sitemap.project_id),
+      hasIncompleteProjectDocuments(supabase, sitemap.project_id),
+    ]);
+
   return (
     <SitemapGraph
       key={sitemap.id}
       initialBrief={
         projectRowToBrief(
-          projectRowById.get(sitemap.project_id),
-          projectContextByProject.get(sitemap.project_id) ?? null,
+          sitemapProjectRow,
+          sitemapProjectContext,
         ) || sitemap.brief || ""
       }
       initialCopies={(copies ?? []) as PageCopy[]}
       initialEdges={Array.isArray(sitemap.edges) ? sitemap.edges.filter(isSitemapEdge) : []}
       initialNodes={Array.isArray(sitemap.nodes) ? sitemap.nodes.filter(isSitemapNode) : []}
       initialProjectId={sitemap.project_id ?? ""}
-      initialProjectHasIncompleteDocuments={
-        sitemap.project_id ? hasIncompleteDocumentsByProject.get(sitemap.project_id) ?? false : false
-      }
+      initialProjectHasIncompleteDocuments={sitemapHasIncompleteDocuments}
       initialProjectName={projectNameById.get(sitemap.project_id) ?? "Sitemap Canvas"}
       initialProjects={projectOptions}
       initialSitemapId={sitemap.id}
+      initialStyleGuide={sitemapProjectRow?.style_guide ?? ""}
     />
   );
 }

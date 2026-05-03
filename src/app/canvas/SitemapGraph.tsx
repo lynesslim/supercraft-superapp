@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { Loader2, ChevronDown, Search } from "lucide-react";
 import {
   Background,
   Controls,
@@ -77,6 +78,7 @@ export type ProjectOption = {
 type RefineMode =
   | "regenerate"
   | "regenerate-selection"
+  | "regenerate-style-guide"
   | "paraphrase"
   | "shorten"
   | "expand"
@@ -93,6 +95,7 @@ type SitemapGraphProps = {
   initialProjectName?: string;
   initialProjects?: ProjectOption[];
   initialSitemapId?: string;
+  initialStyleGuide?: string;
 };
 
 const SITEMAP_LOADING_MESSAGES = [
@@ -125,6 +128,7 @@ const SAVE_COPY_MESSAGES = ["💾 Saving copy...", "✅ Updating saved draft..."
 const REFINE_LOADING_MESSAGES: Record<RefineMode, string[]> = {
   regenerate: ["🔄 Regenerating copy...", "✨ Polishing the full draft..."],
   "regenerate-selection": ["🔄 Rewriting selected text...", "✨ Fitting it back into place..."],
+  "regenerate-style-guide": ["🔄 Regenerating style guide...", "✨ Polishing the style..."],
   paraphrase: ["✍️ Paraphrasing selected text...", "✨ Preserving the meaning..."],
   shorten: ["✂️ Shortening selected text...", "✨ Keeping the core message..."],
   expand: ["➕ Expanding selected text...", "✨ Adding useful detail..."],
@@ -192,7 +196,7 @@ function SitemapNode({ data, id, selected }: NodeProps<Node<CanvasNodeData>>) {
       </div>
 
       {/* Sub-sections */}
-      {sections.length > 0 && (
+      {!isRoot && sections.length > 0 && (
         <div className="flex flex-col gap-1 px-3 py-2">
           {sections.map((section, i) => (
             <div
@@ -639,6 +643,7 @@ export default function SitemapGraph({
   initialProjectName = "Sitemap Canvas",
   initialProjects = [],
   initialSitemapId = "",
+  initialStyleGuide = "",
 }: SitemapGraphProps) {
   const router = useRouter();
   const [brief, setBrief] = useState(initialBrief);
@@ -665,7 +670,12 @@ export default function SitemapGraph({
   const [draggingNodeId, setDraggingNodeId] = useState("");
   const [dropTarget, setDropTarget] = useState<ListDropTarget | null>(null);
   const [isCopyPanelOpen, setIsCopyPanelOpen] = useState(false);
+  const [copyPanelTab, setCopyPanelTab] = useState<"context" | "styleGuide">("context");
   const [copies, setCopies] = useState(initialCopies);
+  const [styleGuide, setStyleGuide] = useState(initialStyleGuide);
+  const [nodeEditorExpanded, setNodeEditorExpanded] = useState(false);
+  const [pageListExpanded, setPageListExpanded] = useState(true);
+  const [styleGuideDirty, setStyleGuideDirty] = useState(false);
   const [draftsByPath, setDraftsByPath] = useState<Record<string, string>>(() =>
     initialCopies.reduce<Record<string, string>>((accumulator, copy) => {
       accumulator[copy.url_path] = copy.content ?? "";
@@ -677,16 +687,41 @@ export default function SitemapGraph({
   const [selectionRange, setSelectionRange] = useState<{ start: number; end: number } | null>(null);
   const [feedback, setFeedback] = useState("");
   const [feedbackMode, setFeedbackMode] = useState<RefineMode | null>(null);
+  const [styleGuideSelectedText, setStyleGuideSelectedText] = useState("");
+  const [styleGuideSelectionRange, setStyleGuideSelectionRange] = useState<{ start: number; end: number } | null>(null);
+  const [styleGuideSelectionMenu, setStyleGuideSelectionMenu] = useState<{ x: number; y: number } | null>(null);
   const [contextPdf, setContextPdf] = useState<File | null>(null);
   const [activeCopyAction, setActiveCopyAction] = useState<string | null>(null);
   const [activeRefineMode, setActiveRefineMode] = useState<RefineMode | null>(null);
   const [sitemapLoadingIndex, setSitemapLoadingIndex] = useState(0);
+  const [sitemapFeedback, setSitemapFeedback] = useState("");
+  const [isRegeneratingSitemap, setIsRegeneratingSitemap] = useState(false);
   const [copyLoadingIndex, setCopyLoadingIndex] = useState(0);
   const [autosaveStatus, setAutosaveStatus] = useState<AutosaveStatus>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(initialSitemapId ? new Date() : null);
   const [autosaveError, setAutosaveError] = useState("");
   const [historyDepth, setHistoryDepth] = useState(0);
   const [isExportingWordDoc, setIsExportingWordDoc] = useState(false);
+  const [isSwitchingProject, setIsSwitchingProject] = useState(false);
+  const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
+  const [projectSearchQuery, setProjectSearchQuery] = useState("");
+  const projectDropdownRef = useRef<HTMLDivElement>(null);
+
+  const filteredProjects = useMemo(() => {
+    if (!projectSearchQuery) return projectOptions;
+    const lowerQuery = projectSearchQuery.toLowerCase();
+    return projectOptions.filter((p) => p.name.toLowerCase().includes(lowerQuery));
+  }, [projectOptions, projectSearchQuery]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (projectDropdownRef.current && !projectDropdownRef.current.contains(event.target as Node)) {
+        setIsProjectDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
   const [isSavingContext, startSavingContext] = useTransition();
   const [isGenerating, startGenerating] = useTransition();
   const [isSaving, startSaving] = useTransition();
@@ -828,19 +863,21 @@ export default function SitemapGraph({
   }, [undoGraphChange]);
 
   function switchProject(nextProjectId: string) {
+    setIsSwitchingProject(true);
+    setNotice("Opening project...");
+
     if (nextProjectId === "__new") {
       router.push("/canvas");
       return;
     }
 
     const project = projectOptions.find((option) => option.id === nextProjectId);
-    if (!project) return;
+    if (!project) {
+      setIsSwitchingProject(false);
+      return;
+    }
 
-    router.push(
-      project.sitemapId
-        ? `/canvas?id=${encodeURIComponent(project.sitemapId)}`
-        : `/canvas?projectId=${encodeURIComponent(project.id)}`,
-    );
+    router.push(`/canvas?projectId=${encodeURIComponent(project.id)}`);
   }
 
   useEffect(() => {
@@ -922,6 +959,18 @@ export default function SitemapGraph({
 
     setSelectionRange({ start: textarea.selectionStart, end: textarea.selectionEnd });
     setSelectedText(textarea.value.slice(textarea.selectionStart, textarea.selectionEnd));
+  }, []);
+
+  const updateStyleGuideSelection = useCallback(() => {
+    const textarea = copyTextareaRef.current;
+    if (!textarea || textarea.selectionStart === textarea.selectionEnd) {
+      setStyleGuideSelectionRange(null);
+      setStyleGuideSelectedText("");
+      return;
+    }
+
+    setStyleGuideSelectionRange({ start: textarea.selectionStart, end: textarea.selectionEnd });
+    setStyleGuideSelectedText(textarea.value.slice(textarea.selectionStart, textarea.selectionEnd));
   }, []);
 
   const openCopySelectionMenu = useCallback((event: ReactMouseEvent<HTMLTextAreaElement>) => {
@@ -1435,6 +1484,132 @@ export default function SitemapGraph({
     });
   }
 
+  function generateStyleGuide(silent = false, targetSitemapId?: string) {
+    const targetId = targetSitemapId ?? sitemapId;
+    if (!targetId && !projectId) {
+      if (!silent) setCopyNotice("Save sitemap first before generating style guide.");
+      return;
+    }
+
+    if (!hasProjectContext) {
+      if (!silent) setCopyNotice("Add project overview context before generating style guide.");
+      return;
+    }
+
+    if (!silent) {
+      setCopyLoadingIndex(0);
+      setActiveCopyAction("Generating");
+      setCopyNotice("Generating style guide...");
+    }
+
+    startCopyWork(async () => {
+      const response = await fetch(`/api/sitemaps/${targetId}/copies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "generate-style-guide" }),
+      });
+      let data: { styleGuide?: string; error?: string };
+      try {
+        data = (await response.json()) as { styleGuide?: string; error?: string };
+      } catch {
+        data = { error: `Request failed with status ${response.status}` };
+      }
+
+      if (!silent) setActiveCopyAction(null);
+
+      if (!response.ok || !data.styleGuide) {
+        if (!silent) setCopyNotice(data.error ?? "Style guide generation failed.");
+        return;
+      }
+
+      setStyleGuide(data.styleGuide);
+      setStyleGuideDirty(true);
+      if (!silent) setCopyNotice("Style guide generated. Save when ready.");
+    });
+  }
+
+  function saveStyleGuide() {
+    if (!projectId || !styleGuide.trim()) {
+      setCopyNotice("No style guide to save.");
+      return;
+    }
+
+    setCopyLoadingIndex(0);
+    setActiveCopyAction("Saving");
+    setCopyNotice("Saving style guide...");
+
+    startCopyWork(async () => {
+      const response = await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ style_guide: styleGuide }),
+      });
+      const data = (await response.json()) as { error?: string };
+
+      setActiveCopyAction(null);
+
+      if (!response.ok) {
+        setCopyNotice(data.error ?? "Failed to save style guide.");
+        return;
+      }
+
+      setStyleGuideDirty(false);
+      setCopyNotice("Style guide saved.");
+    });
+  }
+
+  function refineStyleGuideSelection(mode: RefineMode) {
+    if (!styleGuideSelectionRange || !styleGuideSelectedText.trim()) {
+      setCopyNotice("Select text in the style guide before using selection tools.");
+      return;
+    }
+
+    if (!sitemapId && !projectId) {
+      setCopyNotice("Save sitemap first before refining style guide.");
+      return;
+    }
+
+    if (!hasProjectContext) {
+      setCopyNotice("Add project overview context before refining style guide.");
+      return;
+    }
+
+    setCopyLoadingIndex(0);
+    setActiveCopyAction("Refining");
+    setActiveRefineMode(mode);
+    setCopyNotice("Refining style guide...");
+
+    startCopyWork(async () => {
+      const response = await fetch(`/api/sitemaps/${sitemapId}/copies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "refine-style-guide",
+          currentContent: styleGuide,
+          selectedText: styleGuideSelectedText,
+          feedback: undefined,
+          mode,
+        }),
+      });
+      const data = (await response.json()) as { styleGuide?: string; error?: string };
+
+      setActiveCopyAction(null);
+      setActiveRefineMode(null);
+
+      if (!response.ok || !data.styleGuide) {
+        setCopyNotice(data.error ?? "Style guide refinement failed.");
+        return;
+      }
+
+      setStyleGuide(data.styleGuide);
+      setStyleGuideDirty(true);
+      setStyleGuideSelectionRange(null);
+      setStyleGuideSelectedText("");
+      setStyleGuideSelectionMenu(null);
+      setCopyNotice("Style guide refined. Save when ready.");
+    });
+  }
+
   function generateCopy(pageId = selectedNode?.id) {
     if (!pageId) {
       setCopyNotice("Select a page before generating copy.");
@@ -1494,7 +1669,8 @@ export default function SitemapGraph({
     setCopyLoadingIndex(0);
     setActiveCopyAction("Generating");
     setActiveRefineMode(null);
-    setCopyNotice("Generating full web copy...");
+    const pageCount = nodes.length - 1; // exclude root
+    setCopyNotice(`Generating web copy for ${pageCount} pages in parallel...`);
 
     startCopyWork(async () => {
       const savedSitemapId = await ensureSitemapSaved();
@@ -1593,6 +1769,51 @@ export default function SitemapGraph({
   }
 
   function refineCopy(mode: RefineMode) {
+    // Handle style guide regeneration
+    if (mode === "regenerate-style-guide") {
+      if (!sitemapId && !projectId) {
+        setCopyNotice("Save sitemap first before regenerating style guide.");
+        return;
+      }
+
+      if (!hasProjectContext) {
+        setCopyNotice("Add project overview context before regenerating style guide.");
+        return;
+      }
+
+      setCopyLoadingIndex(0);
+      setActiveCopyAction("Refining");
+      setActiveRefineMode(mode);
+      setCopyNotice("Regenerating style guide...");
+
+      startCopyWork(async () => {
+        const response = await fetch(`/api/sitemaps/${sitemapId}/copies`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "refine-style-guide",
+            currentContent: styleGuide,
+            feedback: feedback.trim() || undefined,
+          }),
+        });
+        const data = (await response.json()) as { styleGuide?: string; error?: string };
+
+        setActiveCopyAction(null);
+        setActiveRefineMode(null);
+
+        if (!response.ok || !data.styleGuide) {
+          setCopyNotice(data.error ?? "Style guide regeneration failed.");
+          return;
+        }
+
+        setStyleGuide(data.styleGuide);
+        setStyleGuideDirty(true);
+        setFeedbackMode(null);
+        setCopyNotice("Style guide regenerated. Save when ready.");
+      });
+      return;
+    }
+
     if (!selectedNode) {
       setCopyNotice("Select a page before refining copy.");
       return;
@@ -1696,15 +1917,69 @@ export default function SitemapGraph({
           }),
         );
       }
-      setStrategy(data.sitemap.strategy);
+setStrategy(data.sitemap.strategy);
     historyRef.current = [];
     historySignatureRef.current = "";
     setHistoryDepth(0);
     setNodes(data.nodes.map((node) => ({ ...node, type: "sitemap" })));
-      setEdges(data.edges);
-      if (data.nodes[0]) selectNode(data.nodes[0].id);
-      setHasGenerated(true);
-      setNotice(`Sitemap ready — ${data.nodes.length} pages generated.`);
+    setEdges(data.edges);
+    if (data.nodes[0]) {
+      selectNode(data.nodes[0].id);
+    }
+    setHasGenerated(true);
+    setIsCopyPanelOpen(true);
+    setCopyPanelTab("styleGuide");
+    if (hasProjectContext) {
+      generateStyleGuide(true, data.sitemapId);
+    }
+    setNotice(`Sitemap ready — ${data.nodes.length} pages generated.`);
+    });
+  }
+
+  function regenerateSitemap() {
+    if (!sitemapId || !sitemapFeedback.trim()) {
+      setNotice("Enter feedback to regenerate the sitemap.");
+      return;
+    }
+
+    setIsRegeneratingSitemap(true);
+    setNotice("Regenerating sitemap with feedback...");
+
+    startGenerating(async () => {
+      try {
+        const response = await fetch(`/api/sitemaps/${sitemapId}/regenerate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback: sitemapFeedback }),
+        });
+        const data = (await response.json()) as {
+          nodes?: Node<SitemapNodeData>[];
+          edges?: Edge[];
+          strategy?: string;
+          error?: string;
+          detail?: string;
+        };
+
+        console.log("Regenerate response:", data);
+
+        if (!response.ok || !data.nodes) {
+          setNotice(data.detail || data.error || "Sitemap regeneration failed.");
+          return;
+        }
+
+        setStrategy(data.strategy ?? "");
+        setSitemapFeedback("");
+        historyRef.current = [];
+        historySignatureRef.current = "";
+        setHistoryDepth(0);
+        setNodes(data.nodes.map((node) => ({ ...node, type: "sitemap" })));
+        setEdges(data.edges ?? []);
+        setNotice(`Sitemap regenerated — ${data.nodes.length} pages.`);
+      } catch {
+        setNotice("Sitemap regeneration failed.");
+      } finally {
+        setIsRegeneratingSitemap(false);
+      }
     });
   }
 
@@ -1768,6 +2043,127 @@ export default function SitemapGraph({
   // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <main className="fixed inset-0 h-screen w-screen overflow-hidden bg-[#111310] text-[#e8eae0]">
+      {/* Fixed Top Bar */}
+      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-white/10 bg-[#1a1c16]/95 px-4 backdrop-blur-xl">
+        <div className="flex items-center gap-3">
+          <BackButton
+            className="h-8 w-8 shrink-0 bg-[#111310]/80"
+            fallbackHref="/"
+          />
+          <div className="relative h-8 w-24 shrink-0">
+            <Image
+              alt="Supercraft"
+              className="object-contain object-left"
+              fill
+              priority
+              sizes="96px"
+              src="/supercraft-logoonly.png"
+            />
+          </div>
+          <div className="relative" ref={projectDropdownRef}>
+            <button
+              className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#111310] px-2 py-1.5 text-xs font-semibold text-[#e8eae0] outline-none transition hover:border-white/20 focus:border-[#a3b840]/50 disabled:opacity-50"
+              disabled={isSwitchingProject}
+              onClick={() => {
+                setIsProjectDropdownOpen(!isProjectDropdownOpen);
+                setProjectSearchQuery("");
+              }}
+              type="button"
+            >
+              <span className="max-w-[150px] truncate">
+                {projectId && projectId !== "__new"
+                  ? projectOptions.find((p) => p.id === projectId)?.name || "Unknown project"
+                  : "New project"}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 text-white/40" />
+            </button>
+
+            {isProjectDropdownOpen && (
+              <div className="motion-pop absolute left-0 top-full mt-1.5 w-56 overflow-hidden rounded-xl border border-white/10 bg-[#1a1c16]/95 text-xs shadow-2xl shadow-black/50 backdrop-blur-xl">
+                <div className="border-b border-white/10 p-2">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-white/40" />
+                    <input
+                      autoFocus
+                      className="w-full rounded-md border border-white/10 bg-white/5 py-1.5 pl-7 pr-2 text-xs text-[#e8eae0] outline-none transition placeholder:text-white/30 focus:border-[#a3b840]/50"
+                      onChange={(e) => setProjectSearchQuery(e.target.value)}
+                      placeholder="Search projects..."
+                      value={projectSearchQuery}
+                    />
+                  </div>
+                </div>
+                <div className="max-h-64 overflow-y-auto p-1">
+                  <button
+                    className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-[#e8eae0] transition hover:bg-white/10"
+                    onClick={() => {
+                      switchProject("__new");
+                      setIsProjectDropdownOpen(false);
+                    }}
+                    type="button"
+                  >
+                    New project
+                  </button>
+                  {filteredProjects.length > 0 ? (
+                    filteredProjects.map((project) => (
+                      <button
+                        key={project.id}
+                        className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-[#e8eae0] transition hover:bg-white/10"
+                        onClick={() => {
+                          switchProject(project.id);
+                          setIsProjectDropdownOpen(false);
+                        }}
+                        type="button"
+                      >
+                        <span className="truncate">{project.name}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-2 py-3 text-center text-white/40">No projects found.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          {isSwitchingProject ? (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-white/45">
+              <Loader2 aria-hidden="true" className="animate-spin" size={12} />
+              Opening...
+            </span>
+          ) : null}
+        </div>
+        {hasGenerated && (
+          <div className="flex items-center gap-3">
+            {(copyLoadingText || copyNotice) && (
+              <span className="text-[11px] text-white/45">{copyLoadingText || copyNotice}</span>
+            )}
+            <button
+              className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/50 transition hover:border-[#a3b840]/40 hover:text-[#a3b840] disabled:cursor-not-allowed disabled:opacity-35"
+              disabled={isSaving || nodes.length === 0}
+              onClick={saveEdits}
+              type="button"
+            >
+              {isSaving ? "Saving…" : "Save"}
+            </button>
+            <button
+              className="rounded-full bg-[#a3b840] px-3 py-1.5 text-[11px] font-bold text-[#1a1c16] transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-35"
+              disabled={isCopyBusy || !hasProjectContext || nodes.length === 0}
+              onClick={generateFullWebCopy}
+              type="button"
+            >
+              Generate Web Copy
+            </button>
+            <button
+              className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/50 transition hover:border-white/20 hover:text-white/70 disabled:cursor-not-allowed disabled:opacity-35"
+              disabled={isExportingWordDoc || nodes.length === 0}
+              onClick={exportWordDoc}
+              type="button"
+            >
+              Export
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Canvas */}
       <div className="fixed inset-0 h-screen w-screen">
         <ReactFlow
@@ -1949,52 +2345,18 @@ export default function SitemapGraph({
 
       {/* Single floating panel */}
       <div className="pointer-events-none fixed inset-0 z-10">
-        <aside className="motion-slide-up pointer-events-auto absolute left-4 top-4 flex max-h-[calc(100vh-2rem)] w-[min(22rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#1a1c16]/95 shadow-2xl shadow-black/50 backdrop-blur-2xl">
+        <aside className="pointer-events-auto absolute left-4 top-20 flex h-[calc(100vh-5.5rem)] w-[min(22rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#1a1c16]/95 shadow-2xl shadow-black/50 backdrop-blur-2xl">
           {/* Top bar */}
           <div className="border-b border-white/8 px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <BackButton
-                  className="h-8 w-8 shrink-0 bg-[#111310]/80"
-                  fallbackHref={projectId ? `/projects/${projectId}` : "/"}
-                />
-                <Link
-                  className="truncate text-[10px] font-semibold tracking-[0.22em] text-[#a3b840]/70 uppercase transition hover:text-[#a3b840]"
-                  href={projectId ? `/projects/${projectId}` : "/"}
-                >
-                  Supercraft Studio
-                </Link>
-              </div>
-              {hasGenerated && (
-                <button
-                  className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-medium text-white/40 transition hover:border-[#a3b840]/40 hover:text-[#a3b840]"
-                  onClick={() => setHasGenerated(false)}
-                  type="button"
-                >
-                  ← Context
-                </button>
-              )}
-            </div>
-
-            <label
-              className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.16em] text-white/30"
-              htmlFor="project-switcher"
-            >
-              Project
-            </label>
-            <select
-              className="mt-1.5 w-full rounded-xl border border-white/10 bg-[#111310] px-3 py-2 text-xs font-semibold text-[#e8eae0] outline-none transition focus:border-[#a3b840]/50"
-              id="project-switcher"
-              onChange={(event) => switchProject(event.target.value)}
-              value={projectId || "__new"}
-            >
-              <option value="__new">New project</option>
-              {projectOptions.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+            {hasGenerated && (
+              <button
+                className="rounded-full border border-white/10 px-2.5 py-1 text-[10px] font-medium text-white/40 transition hover:border-[#a3b840]/40 hover:text-[#a3b840]"
+                onClick={() => setHasGenerated(false)}
+                type="button"
+              >
+                ← Context
+              </button>
+            )}
           </div>
 
           {/* ── Project overview context panel ── */}
@@ -2076,83 +2438,32 @@ export default function SitemapGraph({
           {/* ── Editor panel ── */}
           {hasGenerated && (
             <div className="motion-fade-in canvas-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-              {/* Project header */}
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-semibold tracking-[0.18em] text-[#a3b840]/70 uppercase">
-                    Editor
-                  </p>
-                  <h2 className="mt-0.5 text-base font-semibold tracking-[-0.03em] text-[#e8eae0]">
-                    {projectName}
-                  </h2>
-                </div>
-                <span className="mt-1 shrink-0 rounded-full bg-[#a3b840]/15 px-2.5 py-1 text-[10px] font-semibold text-[#a3b840]">
-                  {nodes.length} pages
-                </span>
-              </div>
-
+              <span className="shrink-0 rounded-full bg-[#a3b840]/15 px-2.5 py-1 text-[10px] font-semibold text-[#a3b840]">
+                {nodes.length} pages
+              </span>
               {strategy && (
                 <p className="line-clamp-3 text-[11px] leading-4 text-white/40">{strategy}</p>
               )}
 
-              <div className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-white/5 px-3 py-2">
-                <span
-                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                    autosaveStatus === "error"
-                      ? "bg-red-400"
-                      : autosaveStatus === "pending" || autosaveStatus === "saving"
-                      ? "bg-amber-300"
-                      : "bg-[#a3b840]"
-                  }`}
-                />
-                <p className="min-w-0 flex-1 truncate text-[11px] text-white/45">
-                  Autosave: {autosaveLabel}
-                </p>
-                <button
-                  className="shrink-0 rounded-full border border-white/10 px-2 py-1 text-[10px] font-medium text-white/40 transition hover:border-[#a3b840]/40 hover:text-[#a3b840] disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={historyDepth === 0}
-                  onClick={undoGraphChange}
-                  type="button"
+              <button
+                className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-black/20 px-3 py-2"
+                onClick={() => setNodeEditorExpanded(!nodeEditorExpanded)}
+                type="button"
+              >
+                <span className="text-[10px] font-semibold tracking-[0.16em] text-white/35 uppercase">
+                  Selected {selectedNode ? `— ${selectedNode.data.title}` : ""}
+                </span>
+                <svg
+                  className={`h-4 w-4 text-white/40 transition ${nodeEditorExpanded ? "rotate-180" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
                 >
-                  Undo
-                </button>
-              </div>
-
-              {/* Action bar */}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                   className="motion-lift rounded-full bg-[#a3b840] px-3 py-2 text-xs font-bold text-[#1a1c16] shadow transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={isSaving || nodes.length === 0}
-                  onClick={saveEdits}
-                  type="button"
-                >
-                  {isSaving ? "Saving…" : "Save"}
-                </button>
-                <button
-                   className="motion-lift rounded-full border border-white/12 bg-white/8 px-3 py-2 text-xs font-medium text-[#e8eae0] transition hover:bg-white/12"
-                  disabled={isCopyBusy || nodes.length === 0 || !hasProjectContext}
-                  onClick={generateFullWebCopy}
-                  type="button"
-                >
-                  {activeCopyAction === "Generating" ? "Generating..." : "Generate Full Web Copy"}
-                </button>
-                <button
-                   className="motion-lift col-span-2 rounded-full border border-white/12 bg-white/8 px-3 py-2 text-xs font-medium text-[#e8eae0] transition hover:bg-white/12 disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={isExportingWordDoc || nodes.length === 0}
-                  onClick={exportWordDoc}
-                  type="button"
-                >
-                  {isExportingWordDoc ? "Exporting Word Doc..." : "Export Word Doc"}
-                </button>
-              </div>
-
-              {/* Node editor */}
-              {selectedNode ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {nodeEditorExpanded && selectedNode ? (
                 <div ref={editorRef} className="rounded-2xl border border-white/8 bg-black/20 p-3">
-                  <p className="mb-2 text-[10px] font-semibold tracking-[0.16em] text-white/35 uppercase">
-                    Selected — {selectedNode.data.title}
-                  </p>
-
                   <label className="text-xs font-semibold text-white/55" htmlFor="title">
                     Page title
                   </label>
@@ -2211,13 +2522,32 @@ export default function SitemapGraph({
                     value={(selectedNode.data.sections ?? []).join(", ")}
                   />
                 </div>
-              ) : (
+              ) : null}
+              {nodeEditorExpanded && !selectedNode && (
                 <div className="rounded-2xl border border-white/8 bg-black/20 px-3 py-4 text-center text-xs text-white/30">
                   Click a node on the canvas to edit it
                 </div>
               )}
 
-              {/* Page list */}
+              {/* Page list - collapsible */}
+              <button
+                className="flex w-full items-center justify-between rounded-xl border border-white/8 bg-black/20 px-3 py-2"
+                onClick={() => setPageListExpanded(!pageListExpanded)}
+                type="button"
+              >
+                <span className="text-[10px] font-semibold tracking-[0.16em] text-white/35 uppercase">
+                  Pages ({nodes.length})
+                </span>
+                <svg
+                  className={`h-4 w-4 text-white/40 transition ${pageListExpanded ? "rotate-180" : ""}`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {pageListExpanded && (
               <div
                 className="canvas-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden rounded-2xl border border-white/8 bg-black/20 p-2"
                 onDragOver={(event) => event.preventDefault()}
@@ -2227,9 +2557,6 @@ export default function SitemapGraph({
                 }}
               >
                 <div className="mb-2 flex items-center justify-between gap-2 px-1">
-                  <p className="text-[10px] font-semibold tracking-[0.16em] text-white/35 uppercase">
-                    Pages
-                  </p>
                   <div className="flex rounded-full border border-white/10 bg-white/5 p-0.5">
                     <button
                       className={`rounded-full px-2 py-1 text-[10px] font-medium transition ${
@@ -2302,7 +2629,6 @@ export default function SitemapGraph({
                           }}
                           style={{ paddingLeft: `${depth * 24 + 8}px` }}
                         >
-                          {/* Tree connector line for child pages */}
                           {depth > 0 && (
                             <span
                               className="absolute bottom-1 top-1 rounded-full"
@@ -2380,18 +2706,38 @@ export default function SitemapGraph({
                   </div>
                 )}
               </div>
+              )}
 
               {(sitemapLoadingText || notice) && (
                 <p className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-white/45">
                   {sitemapLoadingText || notice}
                 </p>
               )}
+
+              {hasGenerated && nodes.length > 1 && (
+                <div className="mt-2 grid gap-2">
+                  <textarea
+                    className="w-full resize-y rounded-xl border border-white/8 bg-[#111310] p-2 text-xs text-[#e8eae0] outline-none placeholder:text-white/25 focus:border-[#a3b840]/50"
+                    onChange={(e) => setSitemapFeedback(e.target.value)}
+                    placeholder="Feedback, e.g. add more pricing pages, less about us, reorganize..."
+                    value={sitemapFeedback}
+                  />
+                  <button
+                    className="rounded-full bg-[#a3b840] px-3 py-2 text-xs font-bold text-[#1a1c16] shadow transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isRegeneratingSitemap || !sitemapFeedback.trim()}
+                    onClick={regenerateSitemap}
+                    type="button"
+                  >
+                    {isRegeneratingSitemap ? "Regenerating..." : "Regenerate Sitemap"}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </aside>
 
         {hasGenerated && selectedNode && isCopyPanelOpen && (
-          <aside className="pointer-events-auto absolute right-0 top-0 flex h-screen w-[min(42rem,100vw)] flex-col overflow-hidden border-l border-white/10 bg-[#1a1c16] text-[#e8eae0] shadow-2xl shadow-black/60">
+          <aside className="pointer-events-auto absolute right-0 top-14 flex h-[calc(100vh-3.5rem)] w-[min(42rem,100vw)] flex-col overflow-hidden border-l border-white/10 bg-[#1a1c16] text-[#e8eae0] shadow-2xl shadow-black/60">
             <div className="flex min-h-16 items-center justify-between gap-4 border-b border-white/8 px-5 py-3">
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold tracking-[-0.03em]">
@@ -2400,9 +2746,35 @@ export default function SitemapGraph({
                 <p className="mt-1 truncate font-mono text-[11px] text-white/35">
                   {selectedNode.data.path}
                 </p>
+                {isRootSelected && (
+                  <div className="mt-3 flex gap-1">
+                    <button
+                      className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${
+                        copyPanelTab === "context"
+                          ? "bg-[#a3b840] text-[#1a1c16]"
+                          : "border border-white/10 text-white/50 hover:border-[#a3b840]/40 hover:text-[#a3b840]"
+                      }`}
+                      onClick={() => setCopyPanelTab("context")}
+                      type="button"
+                    >
+                      Context
+                    </button>
+                    <button
+                      className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${
+                        copyPanelTab === "styleGuide"
+                          ? "bg-[#a3b840] text-[#1a1c16]"
+                          : "border border-white/10 text-white/50 hover:border-[#a3b840]/40 hover:text-[#a3b840]"
+                      }`}
+                      onClick={() => setCopyPanelTab("styleGuide")}
+                      type="button"
+                    >
+                      Style Guide
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {isRootSelected ? (
+                {isRootSelected && copyPanelTab === "context" ? (
                   <button
                     className="rounded-full bg-[#a3b840] px-3 py-1.5 text-[11px] font-bold text-[#1a1c16] transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-35"
                     disabled={isSavingContext}
@@ -2411,6 +2783,28 @@ export default function SitemapGraph({
                   >
                     {isSavingContext ? "Saving..." : "Save context"}
                   </button>
+                ) : isRootSelected && copyPanelTab === "styleGuide" ? (
+                  <>
+                    <button
+                      className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/50 transition hover:border-[#a3b840]/40 hover:text-[#a3b840] disabled:cursor-not-allowed disabled:opacity-35"
+                      disabled={isCopyBusy || !hasProjectContext}
+                      onClick={() => {
+                        setFeedback("");
+                        setFeedbackMode("regenerate-style-guide");
+                      }}
+                      type="button"
+                    >
+                      {isCopyBusy ? "Generating..." : "Regen"}
+                    </button>
+                    <button
+                      className="rounded-full bg-[#a3b840] px-3 py-1.5 text-[11px] font-bold text-[#1a1c16] transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-35"
+                      disabled={isCopyBusy || !styleGuideDirty}
+                      onClick={() => saveStyleGuide()}
+                      type="button"
+                    >
+                      Save
+                    </button>
+                  </>
                 ) : (
                   <>
                     <span
@@ -2462,7 +2856,7 @@ export default function SitemapGraph({
             </div>
 
             <div className="canvas-scrollbar relative flex flex-1 flex-col overflow-y-auto">
-              {isRootSelected ? (
+              {isRootSelected && copyPanelTab === "context" ? (
                 <div className="flex flex-1 flex-col gap-4 px-6 py-5">
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#a3b840]/70">
@@ -2490,6 +2884,66 @@ export default function SitemapGraph({
                       type="file"
                     />
                   </div>
+                </div>
+              ) : isRootSelected && copyPanelTab === "styleGuide" ? (
+                <div className="flex flex-1 flex-col gap-4 px-6 py-5">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#a3b840]/70">
+                      Style guide
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-white/40">
+                      This style guide maintains consistency across all generated web copy.
+                    </p>
+                  </div>
+                  {styleGuide || styleGuideDirty ? (
+                    <textarea
+                      ref={copyTextareaRef}
+                      className="canvas-scrollbar min-h-80 flex-1 resize-none rounded-2xl border border-white/8 bg-[#111310] p-4 text-sm leading-7 text-[#e8eae0] outline-none placeholder:text-white/20 focus:border-[#a3b840]/50"
+                      onBlur={updateCopySelection}
+                      onChange={(event) => {
+                        setStyleGuide(event.target.value);
+                        setStyleGuideDirty(true);
+                      }}
+                      onContextMenu={(event) => {
+                        const textarea = event.currentTarget;
+                        if (textarea.selectionStart === textarea.selectionEnd) {
+                          setStyleGuideSelectionMenu(null);
+                          setStyleGuideSelectionRange(null);
+                          setStyleGuideSelectedText("");
+                          return;
+                        }
+                        event.preventDefault();
+                        setStyleGuideSelectionRange({
+                          start: textarea.selectionStart,
+                          end: textarea.selectionEnd,
+                        });
+                        setStyleGuideSelectedText(
+                          styleGuide.slice(textarea.selectionStart, textarea.selectionEnd),
+                        );
+                        setStyleGuideSelectionMenu({ x: event.clientX, y: event.clientY });
+                      }}
+                      onKeyUp={updateStyleGuideSelection}
+                      onMouseUp={updateStyleGuideSelection}
+                      placeholder="Style guide will be generated based on your project context..."
+                      value={styleGuide}
+                    />
+                  ) : (
+                    <div className="flex flex-1 items-center justify-center px-8">
+                      <div className="w-full max-w-sm text-center">
+                        <p className="text-sm leading-6 text-white/40">
+                          No style guide yet. Generate one based on your project context.
+                        </p>
+                        <button
+                          className="mt-5 rounded-full bg-[#a3b840] px-5 py-2.5 text-sm font-bold text-[#1a1c16] shadow-lg shadow-[#a3b840]/15 transition hover:-translate-y-0.5 hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-45"
+                          disabled={isCopyBusy || !hasProjectContext}
+                          onClick={() => generateStyleGuide()}
+                          type="button"
+                        >
+                          {isCopyBusy ? "Generating..." : "Generate style guide"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : !hasCopy ? (
                 <div className="flex flex-1 items-center justify-center px-8">
@@ -2534,12 +2988,6 @@ export default function SitemapGraph({
                   spellCheck
                   value={draft}
                 />
-              )}
-
-              {(copyLoadingText || copyNotice) && (
-                <p className="absolute bottom-4 left-6 right-6 rounded-xl border border-white/8 bg-[#111310]/90 px-3 py-2 text-[11px] leading-5 text-white/45 shadow-xl">
-                  {copyLoadingText || copyNotice}
-                </p>
               )}
             </div>
           </aside>
@@ -2630,16 +3078,108 @@ export default function SitemapGraph({
           </div>
         )}
 
+        {styleGuideSelectionMenu && styleGuideSelectedText && (
+          <div
+            className="pointer-events-auto fixed z-40 min-w-48 overflow-hidden rounded-xl border border-white/10 bg-[#1a1c16]/95 py-1 text-xs text-[#e8eae0] shadow-2xl shadow-black/50 backdrop-blur-xl"
+            style={{
+              left:
+                typeof window === "undefined"
+                  ? styleGuideSelectionMenu.x
+                  : Math.min(styleGuideSelectionMenu.x, window.innerWidth - 210),
+              top:
+                typeof window === "undefined"
+                  ? styleGuideSelectionMenu.y
+                  : Math.min(styleGuideSelectionMenu.y, window.innerHeight - 230),
+            }}
+          >
+            <button
+              className="block w-full px-3 py-2 text-left transition hover:bg-white/8"
+              disabled={isCopyBusy}
+              onClick={() => {
+                setFeedback("");
+                setFeedbackMode("regenerate-selection");
+                setStyleGuideSelectionMenu(null);
+              }}
+              type="button"
+            >
+              Regenerate with feedback
+            </button>
+            <button
+              className="block w-full px-3 py-2 text-left transition hover:bg-white/8"
+              disabled={isCopyBusy}
+              onClick={() => {
+                setStyleGuideSelectionMenu(null);
+                refineStyleGuideSelection("paraphrase");
+              }}
+              type="button"
+            >
+              Paraphrase
+            </button>
+            <button
+              className="block w-full px-3 py-2 text-left transition hover:bg-white/8"
+              disabled={isCopyBusy}
+              onClick={() => {
+                setStyleGuideSelectionMenu(null);
+                refineStyleGuideSelection("shorten");
+              }}
+              type="button"
+            >
+              Shorten
+            </button>
+            <button
+              className="block w-full px-3 py-2 text-left transition hover:bg-white/8"
+              disabled={isCopyBusy}
+              onClick={() => {
+                setStyleGuideSelectionMenu(null);
+                refineStyleGuideSelection("expand");
+              }}
+              type="button"
+            >
+              Expand
+            </button>
+            <button
+              className="block w-full px-3 py-2 text-left transition hover:bg-white/8"
+              disabled={isCopyBusy}
+              onClick={() => {
+                setStyleGuideSelectionMenu(null);
+                refineStyleGuideSelection("bullet-points");
+              }}
+              type="button"
+            >
+              Bullet points
+            </button>
+            <button
+              className="block w-full px-3 py-2 text-left transition hover:bg-white/8"
+              disabled={isCopyBusy}
+              onClick={() => {
+                setFeedback("");
+                setFeedbackMode("change-tone");
+                setStyleGuideSelectionMenu(null);
+              }}
+              type="button"
+            >
+              Change tone
+            </button>
+          </div>
+        )}
+
         {feedbackMode && (
           <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4">
             <div className="motion-slide-up w-full max-w-md rounded-2xl border border-white/10 bg-[#1a1c16] p-4 text-[#e8eae0] shadow-2xl">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-sm font-semibold">
-                  {feedbackMode === "regenerate" ? "Regenerate copy" : "Refine selection"}
+                  {feedbackMode === "regenerate"
+                    ? "Regenerate copy"
+                    : feedbackMode === "regenerate-style-guide"
+                      ? "Regenerate style guide"
+                      : "Refine selection"}
                 </h3>
                 <button
                   className="rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-white/45 transition hover:text-white/70"
-                  onClick={() => setFeedbackMode(null)}
+                  onClick={() => {
+                    setFeedback("");
+                    setTimeout(() => setFeedbackMode(null), 0);
+                  }}
                   type="button"
                 >
                   Close
@@ -2653,8 +3193,8 @@ export default function SitemapGraph({
               />
               <button
                 className="mt-3 w-full rounded-full bg-[#a3b840] px-4 py-2.5 text-xs font-bold text-[#1a1c16] transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-45"
-                disabled={isCopyBusy}
-                onClick={() => refineCopy(feedbackMode)}
+                disabled={isCopyBusy || !feedbackMode}
+                onClick={() => feedbackMode && refineCopy(feedbackMode)}
                 type="button"
               >
                 {isCopyBusy ? "Regenerating..." : "Regenerate"}

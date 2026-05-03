@@ -46,13 +46,16 @@ export async function POST(request: Request) {
   if (systemError) return systemError;
 
   try {
-    const result = await generateText({
-      model: openai(body.model ?? "gpt-4o-mini"),
+    const model = body.model ?? "gpt-5-mini";
+    console.log("[DEBUG] /api/generate model:", model, "prompt length:", prompt?.length);
+const result = await generateText({
+      model: openai(model),
       system,
       prompt,
-      temperature: body.temperature ?? 0.4,
-      maxOutputTokens: 1600,
+      temperature: 0.4,
+      maxOutputTokens: 4000,
     });
+    console.log("[DEBUG] /api/generate result text length:", result.text?.length ?? 0);
 
     return NextResponse.json({ text: result.text });
   } catch (error) {

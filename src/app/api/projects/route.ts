@@ -11,6 +11,7 @@ import { validateTextLength } from "@/utils/validation";
 export const runtime = "nodejs";
 
 type ProjectStrategy = {
+  brief: string;
   industry: string;
   summary: string;
   usp: string;
@@ -20,8 +21,9 @@ type ProjectStrategy = {
 const strategyJsonSchema: JSONSchema7 = {
   type: "object",
   additionalProperties: false,
-  required: ["industry", "summary", "usp", "strategy_sheet"],
+  required: ["brief", "industry", "summary", "usp", "strategy_sheet"],
   properties: {
+    brief: { type: "string" },
     industry: { type: "string" },
     summary: { type: "string" },
     usp: { type: "string" },
@@ -91,9 +93,10 @@ function parseProjectStrategy(value: unknown): ProjectStrategy {
     throw new Error("OpenAI returned an invalid strategy payload.");
   }
 
-  const { industry, summary, usp, strategy_sheet } = value;
+  const { brief, industry, summary, usp, strategy_sheet } = value;
 
   if (
+    typeof brief !== "string" ||
     typeof industry !== "string" ||
     typeof summary !== "string" ||
     typeof usp !== "string" ||
@@ -102,7 +105,7 @@ function parseProjectStrategy(value: unknown): ProjectStrategy {
     throw new Error("OpenAI returned an incomplete strategy payload.");
   }
 
-  return { industry, summary, usp, strategy_sheet };
+  return { brief, industry, summary, usp, strategy_sheet };
 }
 
 function buildFallbackProjectStrategy({
@@ -121,6 +124,7 @@ function buildFallbackProjectStrategy({
       : `${name} project workspace created without AI-generated strategy.`;
 
   return {
+    brief: context || "No formal brief provided.",
     industry: "Not specified",
     summary,
     usp: "To be refined",
@@ -129,8 +133,9 @@ function buildFallbackProjectStrategy({
   };
 }
 
-function buildPendingPdfProjectStrategy(): ProjectStrategy {
+function buildPendingPdfProjectStrategy(brief: string): ProjectStrategy {
   return {
+    brief,
     industry: "Pending PDF analysis",
     summary: "PDF analysis is pending.",
     usp: "Pending PDF analysis",
@@ -218,6 +223,12 @@ async function getSystemPrompt(name: string) {
   return data.prompt_text.trim();
 }
 
+function withProjectBriefInstruction(systemPrompt: string) {
+  return `${systemPrompt}
+
+For project creation, the structured output must include brief as a consolidated client/project brief. brief should preserve the useful specifics from the submitted brief and additional details; it must not duplicate the summary field. summary should remain a short overview only.`;
+}
+
 async function generateProjectStrategyWithAiSdk({
   additionalDetails,
   brief,
@@ -233,7 +244,7 @@ async function generateProjectStrategyWithAiSdk({
     model: openai("gpt-4o-mini"),
     schema: strategySchema,
     schemaName: "ProjectStrategy",
-    system: systemPrompt,
+    system: withProjectBriefInstruction(systemPrompt),
     prompt: buildStrategyPrompt({ additionalDetails, brief, name }),
     temperature: 0.35,
   });
@@ -268,7 +279,7 @@ async function generateProjectStrategyWithWebSearch({
     },
     body: JSON.stringify({
       model: process.env.OPENAI_RESPONSES_MODEL ?? "gpt-4o-mini",
-      instructions: systemPrompt,
+      instructions: withProjectBriefInstruction(systemPrompt),
       input: buildStrategyPrompt({ additionalDetails, brief, name, urls }),
       tools: [{ type: "web_search" }],
       tool_choice: "auto",
@@ -367,14 +378,14 @@ async function generateProjectStrategyOrFallback({
 
 async function insertProject({
   additionalDetails,
-  brief,
+  submittedBrief,
   name,
   stagingBaseUrl,
   startDate,
   strategy,
 }: {
   additionalDetails: string;
-  brief: string;
+  submittedBrief: string;
   name: string;
   stagingBaseUrl: string;
   startDate: string;
@@ -390,9 +401,10 @@ async function insertProject({
     staging_base_url: stagingBaseUrl || "https://staging.example.com",
     expiry_date: addOneYearDate(startDate),
   };
+  const strategyBrief = strategy.brief.trim() || submittedBrief;
   const strategyPayload = {
     additional_details: additionalDetails,
-    brief,
+    brief: strategyBrief,
     industry: strategy.industry,
     summary: strategy.summary,
     strategy_sheet: strategy.strategy_sheet,
@@ -481,7 +493,7 @@ export async function POST(request: Request) {
 
   try {
     const strategyResult = hasDocuments
-      ? { strategy: buildPendingPdfProjectStrategy(), usedFallbackStrategy: false }
+      ? { strategy: buildPendingPdfProjectStrategy(brief), usedFallbackStrategy: false }
       : await generateProjectStrategyOrFallback({
           additionalDetails,
           brief,
@@ -490,10 +502,10 @@ export async function POST(request: Request) {
         });
     const project = await insertProject({
       additionalDetails,
-      brief,
       name,
       stagingBaseUrl,
       startDate,
+      submittedBrief: brief,
       strategy: strategyResult.strategy,
     });
     if (request.headers.get("accept")?.includes("text/html")) {

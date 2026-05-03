@@ -58,6 +58,7 @@ type UploadedProjectDocument = {
 
 type SaveRequest = {
   details?: Partial<Record<EditableField, unknown>>;
+  style_guide?: string;
 };
 
 type DeleteDocumentRequest = {
@@ -497,6 +498,27 @@ export async function PATCH(
     body = (await request.json()) as SaveRequest;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  // Allow saving just style_guide without details
+  if (body.style_guide !== undefined && !body.details) {
+    const supabase = createAdminClient();
+    const { error } = await supabase
+      .from("projects")
+      .update({ style_guide: body.style_guide, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select("id")
+      .single();
+
+    if (error?.code === "PGRST116") {
+      return NextResponse.json({ error: "Project not found." }, { status: 404 });
+    }
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true });
   }
 
   const details = normalizeDetails(body.details);

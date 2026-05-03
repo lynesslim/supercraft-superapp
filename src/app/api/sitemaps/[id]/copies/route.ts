@@ -42,9 +42,10 @@ type RefineMode =
   | "expand"
   | "change-tone"
   | "bullet-points";
+type CopyRequestMode = RefineMode | "regenerate-style-guide";
 
 type CopyActionRequest = {
-  action?: "generate" | "save" | "refine";
+  action?: "generate" | "save" | "refine" | "generate-style-guide" | "refine-style-guide";
   page?: {
     title?: string;
     path?: string;
@@ -53,9 +54,18 @@ type CopyActionRequest = {
   content?: string;
   currentContent?: string;
   feedback?: string;
-  mode?: RefineMode;
+  mode?: CopyRequestMode;
   selectedText?: string;
+  styleGuide?: string;
 };
+
+const PDF_DERIVED_CONTEXT_INSTRUCTIONS = `PDF-derived context instructions:
+- Some project context may include extracted PDF text, such as text labeled "PDF brief extract". This is extracted text, not a file attachment.
+- Use extracted PDF text to fully understand the business, background, audience, values, tone, proof points, and positioning.
+- Treat extracted PDF text as business-understanding guidance, not guaranteed current truth.
+- Treat origin story, founder/background, company history, legacy, timelines, and historical milestones from extracted PDF text as authoritative unless newer project details contradict them.
+- For current services, offers, pricing, locations, packages, processes, team size, claims, or operational details, prefer current project fields, sitemap context, and page context over extracted PDF text.
+- If details conflict or feel outdated, write flexible copy that avoids unsupported specifics.`;
 
 function isSitemapNode(value: unknown): value is SitemapNode {
   if (!value || typeof value !== "object") {
@@ -141,14 +151,20 @@ async function saveCopy({
 function projectDetailsToContext(project: ProjectRow | null, fallbackBrief: string) {
   if (!project) return fallbackBrief;
 
+  const projectBrief = project.brief?.trim() ?? "";
+  const sitemapBrief = fallbackBrief.trim();
+
   return [
     project.name && `Project name: ${project.name}`,
     project.summary && `Summary:\n${project.summary}`,
     project.industry && `Industry:\n${project.industry}`,
     project.usp && `USP:\n${project.usp}`,
     project.strategy_sheet && `Strategy sheet:\n${project.strategy_sheet}`,
-    project.brief && `Brief:\n${project.brief}`,
+    projectBrief && `Brief:\n${projectBrief}`,
     project.additional_details && `Additional details:\n${project.additional_details}`,
+    sitemapBrief &&
+      sitemapBrief !== projectBrief &&
+      `Sitemap brief and extracted PDF text:\n${sitemapBrief}`,
   ]
     .filter(Boolean)
     .join("\n\n") || fallbackBrief;
@@ -246,13 +262,13 @@ async function ensureProjectStyleGuide({
   }
 
   const result = await generateText({
-    model: openai("gpt-4o-mini"),
+    model: openai("gpt-5-mini"),
     system: prompt.prompt_text,
     prompt: buildStyleGuidePrompt({ projectContext, sitemapContext }),
-    temperature: 0.35,
-    maxOutputTokens: 1800,
-  });
-  const styleGuide = result.text.trim();
+temperature: 0.35,
+      maxOutputTokens: 1800,
+    });
+    const styleGuide = result.text.trim();
 
   if (!styleGuide) {
     throw new Error("Style guide generation returned no content.");
@@ -289,6 +305,8 @@ function buildPagePrompt({
   return `Project context:
 ${projectContext || "No project context was saved for this sitemap."}
 
+${PDF_DERIVED_CONTEXT_INSTRUCTIONS}
+
 Style guide:
 ${styleGuide}
 
@@ -321,8 +339,12 @@ function buildRefinePrompt({
   selectedText?: string;
   styleGuide: string;
 }) {
+  const pdfInstructions =
+    mode === "regenerate" ? `\n${PDF_DERIVED_CONTEXT_INSTRUCTIONS}\n` : "";
+
   return `Project context:
 ${projectContext || "No project context was saved for this sitemap."}
+${pdfInstructions}
 
 Style guide:
 ${styleGuide}
@@ -415,6 +437,146 @@ export async function POST(
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
+
+  if (body.action === "generate-style-guide" || body.action === "refine-style-guide") {
+    requireEnv("openai");
+
+    const { data: sitemap, error: sitemapError } = await supabase
+      .from("sitemaps")
+      .select("brief,edges,nodes,project_id")
+      .eq("id", id)
+      .single();
+
+    if (sitemapError || !sitemap) {
+      return NextResponse.json(
+        { error: sitemapError?.message ?? "Sitemap not found." },
+        { status: sitemapError?.code === "PGRST116" ? 404 : 500 },
+      );
+    }
+
+    const nodes = Array.isArray(sitemap.nodes)
+      ? sitemap.nodes.filter(isSitemapNode)
+      : [];
+    const edges = Array.isArray(sitemap.edges)
+      ? sitemap.edges.filter(isSitemapEdge)
+      : [];
+    const sitemapContext = buildSitemapContext(nodes, edges);
+
+    const { data: project } = sitemap.project_id
+      ? await supabase
+          .from("projects")
+          .select("id,name,summary,industry,usp,strategy_sheet,brief,additional_details,style_guide")
+          .eq("id", sitemap.project_id)
+          .maybeSingle()
+      : { data: null };
+
+    const projectContext = projectDetailsToContext(
+      (project ?? null) as ProjectRow | null,
+      sitemap.brief ?? "",
+    );
+
+    // Only generate new style guide for generate-style-guide action
+    // Skip for refine - use currentContent from frontend
+    let styleGuide = "";
+    if (body.action === "generate-style-guide") {
+      try {
+        styleGuide = await ensureProjectStyleGuide({
+          project: (project ?? null) as ProjectRow | null,
+          projectContext,
+          sitemapContext,
+          supabase,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to generate project style guide.";
+        return NextResponse.json({ error: message }, { status: 500 });
+      }
+      return NextResponse.json({ styleGuide });
+    }
+
+    // For refine-style-guide action
+    requireEnv("openai");
+    const currentStyleGuide = body.currentContent ?? "";
+    const feedback = body.feedback?.trim();
+    const mode = body.mode;
+    const selectedText = body.selectedText;
+
+    try {
+      let promptText = "";
+      let promptInput = "";
+
+      // If there's selected text and a mode (paraphrase, shorten, etc.), handle selection refinement
+      if (selectedText?.trim() && mode && mode !== "regenerate-style-guide") {
+        // Use style_guide_refinement for style guide content
+        const { data: refinePrompt } = await supabase
+          .from("system_prompts")
+          .select("prompt_text")
+          .eq("name", "style_guide_refinement")
+          .single();
+
+        let modeInstructions = "";
+        if (mode === "paraphrase") {
+          modeInstructions = "Rewrite/paraphrase the section in a different way while preserving the meaning.";
+        } else if (mode === "shorten") {
+          modeInstructions = "Make the section more concise and shorter while keeping key points.";
+        } else if (mode === "expand") {
+          modeInstructions = "Add more detail and expand the section.";
+        } else if (mode === "bullet-points") {
+          modeInstructions = "Convert the section to bullet point format.";
+        }
+
+        if (refinePrompt?.prompt_text) {
+          promptText = refinePrompt.prompt_text;
+          promptInput = `Style Guide Section to Refine:
+${selectedText}
+
+Specific instruction: ${modeInstructions}
+
+IMPORTANT: Return ONLY the refined section text, nothing else. Just output the refined content for this section only.`;
+        }
+      } else {
+        // Full regeneration with optional feedback
+        const { data: prompt, error: promptError } = await supabase
+          .from("system_prompts")
+          .select("prompt_text")
+          .eq("name", "style_guide_refinement")
+          .single();
+
+        if (promptError || !prompt?.prompt_text) {
+          return NextResponse.json(
+            { error: promptError?.message ?? "Missing style_guide_refinement system prompt." },
+            { status: 500 },
+          );
+        }
+
+        promptText = prompt.prompt_text;
+        promptInput = `Current style guide:
+${currentStyleGuide}
+
+Feedback:
+${feedback?.trim() || "Improve this style guide."}`;
+      }
+
+      const result = await generateText({
+        model: openai("gpt-5-mini"),
+        system: promptText,
+        prompt: promptInput,
+        temperature: 0.4,
+        maxOutputTokens: 1800,
+      });
+
+        let refinedContent = result.text.trim();
+
+      // For selection modes, replace only the selected portion
+      if (selectedText?.trim() && mode && mode !== "regenerate-style-guide") {
+        refinedContent = currentStyleGuide.replace(selectedText, refinedContent);
+      }
+
+      return NextResponse.json({ styleGuide: refinedContent });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to process style guide.";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
   requireEnv("openai");
 
   const { data: sitemap, error: sitemapError } = await supabase
@@ -492,7 +654,8 @@ export async function POST(
   try {
     if (body.action === "refine") {
       const page = selectedNodes[0];
-      const mode = body.mode ?? "regenerate";
+      const mode: RefineMode =
+        body.mode && body.mode !== "regenerate-style-guide" ? body.mode : "regenerate";
       const needsSelection = mode !== "regenerate";
 
       if (!page) {
@@ -507,7 +670,7 @@ export async function POST(
       }
 
       const result = await generateText({
-        model: openai("gpt-4o-mini"),
+        model: openai("gpt-5-mini"),
         system: prompt.prompt_text,
         prompt: buildRefinePrompt({
           currentContent: body.currentContent ?? "",
@@ -520,7 +683,7 @@ export async function POST(
           styleGuide,
         }),
         temperature: 0.4,
-        maxOutputTokens: mode === "regenerate" ? 2200 : 700,
+        maxOutputTokens: mode === "regenerate" ? 4400 : 700,
       });
 
       const content =
@@ -534,11 +697,9 @@ export async function POST(
       return NextResponse.json({ content });
     }
 
-    const copies = [];
-
-    for (const page of selectedNodes) {
+    const generateAndSaveCopy = async (page: typeof selectedNodes[0]) => {
       const result = await generateText({
-        model: openai("gpt-4o-mini"),
+        model: openai("gpt-5-mini"),
         system: prompt.prompt_text,
         prompt: buildPagePrompt({
           projectContext,
@@ -547,7 +708,7 @@ export async function POST(
           styleGuide,
         }),
         temperature: 0.45,
-        maxOutputTokens: 2200,
+        maxOutputTokens: 4400,
       });
 
       const copy = await saveCopy({
@@ -560,8 +721,10 @@ export async function POST(
         supabase,
       });
 
-      copies.push({ ...copy, page_id: page.id });
-    }
+      return { ...copy, page_id: page.id, pageTitle: page.data.title };
+    };
+
+    const copies = await Promise.all(selectedNodes.map(generateAndSaveCopy));
 
     return NextResponse.json({ copies });
   } catch (error) {

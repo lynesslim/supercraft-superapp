@@ -24,8 +24,10 @@ function createPlaygroundTempStoragePath(fileName: string, index: number) {
 }
 
 export async function POST(request: Request) {
+  console.log("[DEBUG] playground generate POST called");
   const authError = await requireApiRole(["superadmin"]);
   if (authError) return authError;
+  console.log("[DEBUG] auth passed");
 
   let formData: FormData;
   try {
@@ -43,8 +45,7 @@ export async function POST(request: Request) {
 
   const system = formData.get("system")?.toString().trim() ?? "";
   const prompt = formData.get("prompt")?.toString().trim() ?? "";
-  const temperature = parseFloat(formData.get("temperature")?.toString() ?? "0.4");
-  const model = formData.get("model")?.toString() ?? process.env.OPENAI_DOCUMENT_MODEL ?? process.env.OPENAI_RESPONSES_MODEL ?? "gpt-4o-mini";
+  const model = formData.get("model")?.toString() ?? process.env.OPENAI_DOCUMENT_MODEL ?? process.env.OPENAI_RESPONSES_MODEL ?? "gpt-5-mini";
 
   if (!system || !prompt) {
     return NextResponse.json({ error: "Both `system` and `prompt` are required." }, { status: 400 });
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
   const systemError = validateTextLength(system, "System prompt");
   if (systemError) return systemError;
 
+  console.log("[DEBUG] playground: system length:", system?.length, "prompt length:", prompt?.length);
   const files = formData.getAll("files").filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length > MAX_LARGE_PDF_FILES) {
     return NextResponse.json(
@@ -131,10 +133,10 @@ export async function POST(request: Request) {
         input: [{ role: "user", content }],
         instructions: system,
         model,
-        temperature: isNaN(temperature) ? 0.4 : temperature,
-        max_output_tokens: 1600,
+        max_output_tokens: 4000,
       }),
     });
+    console.log("[DEBUG] playground request:", { model, system: system?.slice(0, 100), prompt: prompt?.slice(0, 100) });
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({})) as {
@@ -147,6 +149,7 @@ export async function POST(request: Request) {
     }
 
     const payload = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
+    console.log("[DEBUG] playground response payload:", JSON.stringify(payload));
 
     let text = payload.output_text ?? "";
     if (!text && Array.isArray(payload.output)) {
@@ -162,9 +165,12 @@ export async function POST(request: Request) {
         if (text) break;
       }
     }
+    console.log("[DEBUG] playground response text length:", text?.length ?? 0, "payload keys:", Object.keys(payload));
 
     outputText = text || "No response text returned.";
+    console.log("[DEBUG] final outputText length:", outputText?.length);
   } catch (error) {
+    console.log("[DEBUG] playground catch error:", error);
     routeError = error instanceof Error ? error : new Error("Unable to generate AI output.");
     logServerError("playground.generate.failed", routeError);
   } finally {
