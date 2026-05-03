@@ -141,6 +141,16 @@ export async function POST(request: NextRequest) {
 
   const passcodeValue = typeof passcode === "string" ? passcode.trim() : "";
 
+  let supabase: ReturnType<typeof createAdminClient>;
+  try {
+    supabase = createAdminClient();
+  } catch {
+    return NextResponse.json(
+      { error: "Server configuration error." },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
   let project;
 
   if (passcodeValue) {
