@@ -57,6 +57,7 @@ type CopyActionRequest = {
   mode?: CopyRequestMode;
   selectedText?: string;
   styleGuide?: string;
+  selectedDocumentIds?: string[];
 };
 
 const PDF_DERIVED_CONTEXT_INSTRUCTIONS = `PDF-derived context instructions:
@@ -291,20 +292,43 @@ temperature: 0.35,
   return styleGuide;
 }
 
+async function getSelectedDocumentExtracts(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  documentIds: string[],
+) {
+  if (documentIds.length === 0) return "";
+
+  const { data: documents } = await supabase
+    .from("project_documents")
+    .select("file_name,analysis_summary")
+    .in("id", documentIds);
+
+  if (!documents || documents.length === 0) return "";
+
+  const extracts = documents
+    .filter((doc) => doc.analysis_summary)
+    .map((doc) => `PDF brief extract from ${doc.file_name}:\n${doc.analysis_summary}`);
+
+  return extracts.length > 0 ? `\n\nSelected reference documents:\n${extracts.join("\n\n")}` : "";
+}
+
 function buildPagePrompt({
   projectContext,
   sitemapContext,
   page,
   styleGuide,
+  additionalDocumentContext,
 }: {
   projectContext: string;
   sitemapContext: string;
   page: SitemapNode;
   styleGuide: string;
+  additionalDocumentContext?: string;
 }) {
   return `Project context:
 ${projectContext || "No project context was saved for this sitemap."}
 
+${additionalDocumentContext || ""}
 ${PDF_DERIVED_CONTEXT_INSTRUCTIONS}
 
 Style guide:
@@ -329,6 +353,7 @@ function buildRefinePrompt({
   sitemapContext,
   selectedText,
   styleGuide,
+  additionalDocumentContext,
 }: {
   currentContent: string;
   feedback?: string;
@@ -338,9 +363,12 @@ function buildRefinePrompt({
   sitemapContext: string;
   selectedText?: string;
   styleGuide: string;
+  additionalDocumentContext?: string;
 }) {
   const pdfInstructions =
-    mode === "regenerate" ? `\n${PDF_DERIVED_CONTEXT_INSTRUCTIONS}\n` : "";
+    mode === "regenerate"
+      ? `\n${additionalDocumentContext || ""}\n${PDF_DERIVED_CONTEXT_INSTRUCTIONS}\n`
+      : "";
 
   return `Project context:
 ${projectContext || "No project context was saved for this sitemap."}
@@ -669,6 +697,11 @@ ${feedback?.trim() || "Improve this style guide."}`;
         );
       }
 
+      const additionalDocumentContext =
+        mode === "regenerate" && body.selectedDocumentIds?.length
+          ? await getSelectedDocumentExtracts(supabase, body.selectedDocumentIds)
+          : "";
+
       const result = await generateText({
         model: openai("gpt-5-mini"),
         system: prompt.prompt_text,
@@ -681,6 +714,7 @@ ${feedback?.trim() || "Improve this style guide."}`;
           sitemapContext,
           selectedText: body.selectedText,
           styleGuide,
+          additionalDocumentContext,
         }),
         temperature: 0.4,
         maxOutputTokens: mode === "regenerate" ? 4400 : 700,
@@ -697,6 +731,10 @@ ${feedback?.trim() || "Improve this style guide."}`;
       return NextResponse.json({ content });
     }
 
+    const additionalDocumentContext = body.selectedDocumentIds?.length
+      ? await getSelectedDocumentExtracts(supabase, body.selectedDocumentIds)
+      : "";
+
     const generateAndSaveCopy = async (page: typeof selectedNodes[0]) => {
       const result = await generateText({
         model: openai("gpt-5-mini"),
@@ -706,6 +744,7 @@ ${feedback?.trim() || "Improve this style guide."}`;
           sitemapContext,
           page,
           styleGuide,
+          additionalDocumentContext,
         }),
         temperature: 0.45,
         maxOutputTokens: 4400,

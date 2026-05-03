@@ -197,18 +197,17 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id: feedbackId } = await params;
+  const { searchParams } = new URL(request.url);
+  const queryEmbedKey = searchParams.get("embed_key") ?? searchParams.get("embedKey");
 
-  let body: PatchFeedbackPayload;
+  let body: PatchFeedbackPayload = {};
   try {
     body = (await request.json()) as PatchFeedbackPayload;
   } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body." },
-      { status: 400, headers: CORS_HEADERS },
-    );
+    // Allow empty body, use query param
   }
 
-  const embedKey = (body.embed_key ?? body.embedKey) as string | undefined;
+  const embedKey = (body.embed_key ?? body.embedKey ?? queryEmbedKey) as string | undefined;
   const status = body.status;
 
   if (typeof embedKey !== "string" || !embedKey) {
