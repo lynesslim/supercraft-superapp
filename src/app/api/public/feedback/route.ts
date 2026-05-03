@@ -107,15 +107,19 @@ export async function GET(request: NextRequest) {
 }
 
 type FeedbackPinPayload = {
+  embed_key?: unknown;
   embedKey?: unknown;
   passcode?: unknown;
+  comment_text?: unknown;
   commentText?: unknown;
   selector?: unknown;
   coordinates?: unknown;
+  url_path?: unknown;
   urlPath?: unknown;
   author?: unknown;
   priority?: unknown;
   metadata?: unknown;
+  image_urls?: unknown;
   imageUrls?: unknown;
 };
 
@@ -130,9 +134,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { embedKey, passcode, commentText, selector, coordinates, urlPath, author, priority, metadata, imageUrls } = body;
+  const embedKey = (body.embed_key ?? body.embedKey) as string | undefined;
+  const passcode = body.passcode;
+  const commentText = (body.comment_text ?? body.commentText) as string | undefined;
+  const selector = body.selector;
+  const coordinates = body.coordinates;
+  const urlPath = (body.url_path ?? body.urlPath) as string | undefined;
+  const author = body.author;
+  const priority = body.priority;
+  const metadata = body.metadata;
+  const imageUrls = body.image_urls ?? body.imageUrls;
 
-  if (typeof embedKey !== "string" || !embedKey.trim()) {
+  if (typeof embedKey !== "string" || !embedKey) {
     return NextResponse.json(
       { error: "embed_key is required." },
       { status: 400, headers: CORS_HEADERS },
