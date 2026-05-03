@@ -715,7 +715,11 @@ export default function SitemapGraph({
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (projectDropdownRef.current && event.target && !projectDropdownRef.current.contains(event.target as Node | null)) {
+      if (
+        projectDropdownRef.current &&
+        event.target instanceof globalThis.Node &&
+        !projectDropdownRef.current.contains(event.target)
+      ) {
         setIsProjectDropdownOpen(false);
       }
     }
