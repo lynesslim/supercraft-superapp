@@ -27,7 +27,9 @@ async function getProjectByEmbedKey(
 }
 
 type CommentPayload = {
+  embed_key?: unknown;
   embedKey?: unknown;
+  author_type?: unknown;
   authorType?: unknown;
   body?: unknown;
 };
@@ -48,9 +50,11 @@ export async function POST(
     );
   }
 
-  const { embedKey, authorType, body: commentBody } = body;
+  const embedKey = (body.embed_key ?? body.embedKey) as string | undefined;
+  const authorType = (body.author_type ?? body.authorType) as string | undefined;
+  const commentBody = body.body;
 
-  if (typeof embedKey !== "string" || !embedKey.trim()) {
+  if (typeof embedKey !== "string" || !embedKey) {
     return NextResponse.json(
       { error: "embed_key is required." },
       { status: 400, headers: CORS_HEADERS },

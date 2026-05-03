@@ -12,6 +12,7 @@ export function OPTIONS() {
 }
 
 type VerifyPinPayload = {
+  embed_key?: unknown;
   embedKey?: unknown;
   passcode?: unknown;
 };
@@ -27,9 +28,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { embedKey, passcode } = body;
+  const embedKey = (body.embed_key ?? body.embedKey) as string | undefined;
+  const passcode = body.passcode;
 
-  if (typeof embedKey !== "string" || !embedKey.trim()) {
+  if (typeof embedKey !== "string" || !embedKey) {
     return NextResponse.json(
       { error: "embed_key is required." },
       { status: 400, headers: CORS_HEADERS },
