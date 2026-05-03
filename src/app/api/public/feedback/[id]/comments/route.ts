@@ -34,6 +34,77 @@ type CommentPayload = {
   body?: unknown;
 };
 
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id: feedbackId } = await params;
+  const { searchParams } = new URL(request.url);
+  const embedKey = searchParams.get("embed_key") ?? searchParams.get("embedKey");
+
+  if (typeof embedKey !== "string" || !embedKey) {
+    return NextResponse.json(
+      { error: "embed_key is required." },
+      { status: 400, headers: CORS_HEADERS },
+    );
+  }
+
+  let supabase: ReturnType<typeof createAdminClient>;
+  try {
+    supabase = createAdminClient();
+  } catch {
+    return NextResponse.json(
+      { error: "Server configuration error." },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
+  const project = await getProjectByEmbedKey(supabase, embedKey);
+  if (!project) {
+    return NextResponse.json(
+      { error: "Invalid embed key." },
+      { status: 401, headers: CORS_HEADERS },
+    );
+  }
+
+  const { data: feedback } = await supabase
+    .from("feedback")
+    .select("id")
+    .eq("id", feedbackId)
+    .eq("project_id", project.id)
+    .maybeSingle();
+
+  if (!feedback) {
+    return NextResponse.json(
+      { error: "Feedback pin not found." },
+      { status: 404, headers: CORS_HEADERS },
+    );
+  }
+
+  const { data, error } = await supabase
+    .from("feedback_comments")
+    .select("id,feedback_id,body,author_type,created_at")
+    .eq("feedback_id", feedbackId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
+  const mapped = (data ?? []).map((c) => ({
+    id: c.id,
+    feedbackId: c.feedback_id,
+    body: c.body,
+    authorType: c.author_type,
+    createdAt: c.created_at,
+  }));
+
+  return NextResponse.json(mapped, { headers: CORS_HEADERS });
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
