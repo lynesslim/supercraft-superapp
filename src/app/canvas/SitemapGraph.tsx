@@ -148,7 +148,7 @@ const SECTION_COLORS = [
 // ─── Node Card ────────────────────────────────────────────────────────────────
 function SitemapNode({ data, id, selected }: NodeProps<Node<CanvasNodeData>>) {
   const sections = data.sections ?? [];
-  const isRoot = data.path === "/";
+  const isRoot = id === ROOT_ID;
 
   return (
     <div
