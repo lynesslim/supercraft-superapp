@@ -186,6 +186,88 @@ export async function PUT(
   return NextResponse.json(mapFeedbackToSnakeCase(data), { headers: CORS_HEADERS });
 }
 
+type PatchFeedbackPayload = {
+  embed_key?: unknown;
+  embedKey?: unknown;
+  status?: unknown;
+};
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id: feedbackId } = await params;
+
+  let body: PatchFeedbackPayload;
+  try {
+    body = (await request.json()) as PatchFeedbackPayload;
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body." },
+      { status: 400, headers: CORS_HEADERS },
+    );
+  }
+
+  const embedKey = (body.embed_key ?? body.embedKey) as string | undefined;
+  const status = body.status;
+
+  if (typeof embedKey !== "string" || !embedKey) {
+    return NextResponse.json(
+      { error: "embed_key is required." },
+      { status: 400, headers: CORS_HEADERS },
+    );
+  }
+
+  if (status !== "resolved") {
+    return NextResponse.json(
+      { error: "Only status resolved is supported." },
+      { status: 400, headers: CORS_HEADERS },
+    );
+  }
+
+  let supabase: ReturnType<typeof createAdminClient>;
+  try {
+    supabase = createAdminClient();
+  } catch {
+    return NextResponse.json(
+      { error: "Server configuration error." },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
+  const project = await getProjectByEmbedKey(supabase, embedKey);
+  if (!project) {
+    return NextResponse.json(
+      { error: "Invalid embed key." },
+      { status: 401, headers: CORS_HEADERS },
+    );
+  }
+
+  const { data, error } = await supabase
+    .from("feedback")
+    .update({ status: "resolved" })
+    .eq("id", feedbackId)
+    .eq("project_id", project.id)
+    .select("id,selector,coordinates,comment_text,author,status,priority,url_path,created_at,image_urls")
+    .maybeSingle();
+
+  if (error) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
+  if (!data) {
+    return NextResponse.json(
+      { error: "Feedback not found." },
+      { status: 404, headers: CORS_HEADERS },
+    );
+  }
+
+  return NextResponse.json({ ok: true, ...mapFeedbackToSnakeCase(data) }, { headers: CORS_HEADERS });
+}
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
