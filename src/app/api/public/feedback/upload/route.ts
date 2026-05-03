@@ -43,16 +43,26 @@ export async function POST(request: NextRequest) {
   let supabase: ReturnType<typeof createAdminClient>;
   try {
     supabase = createAdminClient();
-  } catch {
+  } catch (e) {
     return NextResponse.json(
-      { error: "Server configuration error." },
+      { error: "Server configuration error.", details: String(e) },
       { status: 500, headers: CORS_HEADERS },
     );
   }
 
-  const formData = await request.formData();
-  const embedKey = formData.get("embed_key") as string | null;
-  const file = formData.get("file") as File | null;
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid form data." },
+      { status: 400, headers: CORS_HEADERS },
+    );
+  }
+
+  const embedKeyInput = formData.get("embed_key");
+  const embedKey = typeof embedKeyInput === "string" ? embedKeyInput : null;
+  const file = formData.get("file");
 
   if (!embedKey || !embedKey.trim()) {
     return NextResponse.json(
@@ -76,12 +86,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  await ensureFeedbackImagesBucket(supabase);
+  try {
+    await ensureFeedbackImagesBucket(supabase);
+  } catch (e) {
+    return NextResponse.json(
+      { error: "Failed to create bucket.", details: String(e) },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
 
   const extension = file.name.split(".").pop()?.toLowerCase() || "png";
   const storagePath = `${project.id}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
 
-  const { error: uploadError } = await supabase.storage
+  const { data: uploadData, error: uploadError } = await supabase.storage
     .from(FEEDBACK_IMAGES_BUCKET)
     .upload(storagePath, file, {
       contentType: file.type || "image/png",
@@ -90,7 +107,7 @@ export async function POST(request: NextRequest) {
 
   if (uploadError) {
     return NextResponse.json(
-      { error: uploadError.message },
+      { error: "Upload failed.", details: uploadError.message },
       { status: 500, headers: CORS_HEADERS },
     );
   }
