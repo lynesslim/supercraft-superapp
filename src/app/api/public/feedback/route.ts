@@ -58,9 +58,9 @@ function mapFeedbackToSnakeCase(feedback: Record<string, unknown>) {
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const embedKey = searchParams.get("embed_key");
-  const urlPath = searchParams.get("urlPath");
-  const includeResolved = searchParams.get("includeResolved") === "1";
+  const embedKey = searchParams.get("embed_key") ?? searchParams.get("embedKey");
+  const urlPath = searchParams.get("urlPath") ?? searchParams.get("url_path");
+  const includeResolved = searchParams.get("includeResolved") === "1" || searchParams.get("include_resolved") === "1";
 
   let supabase: ReturnType<typeof createAdminClient>;
   try {

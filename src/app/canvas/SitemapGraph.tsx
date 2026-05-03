@@ -824,25 +824,28 @@ export default function SitemapGraph({
   }, [projectId]);
 
   useEffect(() => {
-    if (!projectId) {
-      setProjectDocuments([]);
-      setSelectedDocumentIds(new Set());
-      return;
-    }
+    if (!projectId) return;
+
+    let cancelled = false;
 
     async function fetchDocuments() {
       try {
         const response = await fetch(`/api/projects/${projectId}/documents`);
         const data = (await response.json()) as { documents?: { id: string; fileName: string; storagePath: string }[] };
-        if (data.documents) {
+        if (!cancelled && data.documents) {
           setProjectDocuments(data.documents);
         }
       } catch {
-        setProjectDocuments([]);
+        if (!cancelled) {
+          setProjectDocuments([]);
+        }
       }
     }
 
     fetchDocuments();
+    return () => {
+      cancelled = true;
+    };
   }, [projectId]);
 
   const pushHistory = useCallback(() => {
@@ -3262,6 +3265,37 @@ setStrategy(data.sitemap.strategy);
                 placeholder="Add feedback, e.g. make it more premium, less salesy, clearer, or more concise."
                 value={feedback}
               />
+              {feedbackMode === "regenerate" && projectDocuments.length > 0 && (
+                <div className="mt-3 rounded-xl border border-white/8 bg-[#111310] p-3">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/50">
+                    Reference documents
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    {projectDocuments.map((doc) => (
+                      <label
+                        className="flex cursor-pointer items-center gap-2 text-xs text-white/70 hover:text-white"
+                        key={doc.id}
+                      >
+                        <input
+                          checked={selectedDocumentIds.has(doc.id)}
+                          className="accent-[#a3b840]"
+                          onChange={(e) => {
+                            const next = new Set(selectedDocumentIds);
+                            if (e.target.checked) {
+                              next.add(doc.id);
+                            } else {
+                              next.delete(doc.id);
+                            }
+                            setSelectedDocumentIds(next);
+                          }}
+                          type="checkbox"
+                        />
+                        {doc.fileName}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
               <button
                 className="mt-3 w-full rounded-full bg-[#a3b840] px-4 py-2.5 text-xs font-bold text-[#1a1c16] transition hover:bg-[#b5cc4a] disabled:cursor-not-allowed disabled:opacity-45"
                 disabled={isCopyBusy || !feedbackMode}
