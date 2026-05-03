@@ -26,6 +26,21 @@ async function getProjectByEmbedKey(
   return data as { id: string } | null;
 }
 
+async function getProjectByEmbedKeyWithPasscode(
+  supabase: ReturnType<typeof createAdminClient>,
+  embedKey: string | null | undefined,
+) {
+  if (!embedKey) return null;
+
+  const { data } = await supabase
+    .from("projects")
+    .select("id, feedback_passcode")
+    .eq("embed_public_key", embedKey)
+    .maybeSingle();
+
+  return data as { id: string; feedback_passcode: string | null } | null;
+}
+
 function mapFeedbackToSnakeCase(feedback: Record<string, unknown>) {
   return {
     id: feedback.id,
@@ -93,6 +108,7 @@ export async function GET(request: NextRequest) {
 
 type FeedbackPinPayload = {
   embedKey?: unknown;
+  passcode?: unknown;
   commentText?: unknown;
   selector?: unknown;
   coordinates?: unknown;
@@ -100,6 +116,7 @@ type FeedbackPinPayload = {
   author?: unknown;
   priority?: unknown;
   metadata?: unknown;
+  imageUrls?: unknown;
 };
 
 export async function POST(request: NextRequest) {
@@ -113,7 +130,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { embedKey, commentText, selector, coordinates, urlPath, author, priority, metadata } = body;
+  const { embedKey, passcode, commentText, selector, coordinates, urlPath, author, priority, metadata, imageUrls } = body;
 
   if (typeof embedKey !== "string" || !embedKey.trim()) {
     return NextResponse.json(
@@ -122,28 +139,39 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const passcodeValue = typeof passcode === "string" ? passcode.trim() : "";
+
+  let project;
+
+  if (passcodeValue) {
+    const projectWithPasscode = await getProjectByEmbedKeyWithPasscode(supabase, embedKey);
+    if (!projectWithPasscode) {
+      return NextResponse.json(
+        { error: "Invalid embed key." },
+        { status: 401, headers: CORS_HEADERS },
+      );
+    }
+    if (projectWithPasscode.feedback_passcode !== passcodeValue) {
+      return NextResponse.json(
+        { error: "Invalid passcode." },
+        { status: 401, headers: CORS_HEADERS },
+      );
+    }
+    project = projectWithPasscode;
+  } else {
+    project = await getProjectByEmbedKey(supabase, embedKey);
+    if (!project) {
+      return NextResponse.json(
+        { error: "Invalid embed key." },
+        { status: 401, headers: CORS_HEADERS },
+      );
+    }
+  }
+
   if (typeof commentText !== "string" || !commentText.trim()) {
     return NextResponse.json(
       { error: "commentText is required." },
       { status: 400, headers: CORS_HEADERS },
-    );
-  }
-
-  let supabase: ReturnType<typeof createAdminClient>;
-  try {
-    supabase = createAdminClient();
-  } catch {
-    return NextResponse.json(
-      { error: "Server configuration error." },
-      { status: 500, headers: CORS_HEADERS },
-    );
-  }
-
-  const project = await getProjectByEmbedKey(supabase, embedKey);
-  if (!project) {
-    return NextResponse.json(
-      { error: "Invalid embed key." },
-      { status: 401, headers: CORS_HEADERS },
     );
   }
 
@@ -159,7 +187,7 @@ export async function POST(request: NextRequest) {
       priority: typeof priority === "string" ? priority : "low",
       metadata: metadata && typeof metadata === "object" ? metadata : {},
       status: "open",
-      image_urls: [],
+      image_urls: Array.isArray(imageUrls) ? imageUrls : [],
     })
     .select("id,selector,coordinates,comment_text,author,status,priority,url_path,created_at,image_urls")
     .single();

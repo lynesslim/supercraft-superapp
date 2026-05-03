@@ -24,6 +24,8 @@ type ParagraphStyle =
   | "Heading1"
   | "Heading2"
   | "Heading3"
+  | "FieldLabel"
+  | "LayoutType"
   | "Normal"
   | "Tree"
   | "Spacer";
@@ -113,12 +115,29 @@ function formatTreeLine(item: HierarchyItem, index: number) {
 function cleanMarkdownLine(line: string) {
   return line
     .replace(/^#{1,6}\s+/, "")
-    .replace(/^\s*[-*]\s+/, "• ")
+    .replace(/^\s*[-*]\s+/, "")
     .replace(/\*\*(.*?)\*\*/g, "$1")
     .replace(/__(.*?)__/g, "$1")
     .replace(/\*(.*?)\*/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
     .trimEnd();
+}
+
+function parseFieldLabel(rawLine: string): false | { label: string; content: string; isLayoutType: boolean } {
+  const normalized = rawLine
+    .replace(/^\s*[-*]\s+/, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trimEnd();
+  const match = /^([A-Za-z][A-Za-z0-9 '_\-]{0,39}):\s*(.*)$/.exec(normalized);
+  if (!match) return false;
+  const label = match[1].trim();
+  const content = match[2].trim().replace(/"/g, "");
+  if (content.startsWith("//") || content.startsWith("http")) return false;
+  const isLayoutType = label.toLowerCase() === "layout_type";
+  return { label: label.charAt(0).toUpperCase() + label.slice(1), content, isLayoutType };
 }
 
 function pageTitle(projectName: string, title: string) {
@@ -181,6 +200,7 @@ function buildParagraphs({
     let previousWasBlank = false;
     copy.content.split("\n").forEach((line) => {
       const text = cleanMarkdownLine(line);
+
       if (!text) {
         if (!previousWasBlank) pushSpacer(paragraphs);
         previousWasBlank = true;
@@ -203,9 +223,23 @@ function buildParagraphs({
         return;
       }
 
+      const field = parseFieldLabel(line);
+      if (field) {
+        if (field.isLayoutType) {
+          paragraphs.push({ style: "LayoutType", text: `[${field.content}]` });
+        } else {
+          paragraphs.push({ style: "FieldLabel", text: field.label });
+          if (field.content) paragraphs.push({ style: "Normal", text: field.content });
+        }
+        previousWasBlank = false;
+        return;
+      }
+
       paragraphs.push({ style: "Normal", text });
       previousWasBlank = false;
     });
+    pushSpacer(paragraphs);
+    paragraphs.push({ style: "Normal", text: "────────────────────────────────────────────────────" });
   });
 
   return paragraphs;
@@ -218,9 +252,19 @@ function paragraphXml(paragraph: DocParagraph) {
     ParagraphStyle,
     { after: number; before: number; color?: string; font: string; italic?: boolean; line?: number; size: number; weight?: "bold" }
   > = {
+    FieldLabel: { after: 40, before: 180, font: "Arial", size: 22, weight: "bold" },
     Heading1: { after: 240, before: 460, color: "1F2937", font: "Arial", size: 32, weight: "bold" },
     Heading2: { after: 160, before: 320, color: "374151", font: "Arial", size: 26, weight: "bold" },
     Heading3: {
+      after: 100,
+      before: 220,
+      color: "4B5563",
+      font: "Arial",
+      italic: true,
+      size: 23,
+      weight: "bold",
+    },
+    LayoutType: {
       after: 100,
       before: 220,
       color: "4B5563",
@@ -237,6 +281,7 @@ function paragraphXml(paragraph: DocParagraph) {
   const config = styleConfig[paragraph.style];
   const lineSpacing = config.line ? ` w:line="${config.line}" w:lineRule="auto"` : "";
   const keepNext = paragraph.style.startsWith("Heading") ? "<w:keepNext/>" : "";
+
   const runStyle = [
     config.weight === "bold" ? "<w:b/>" : "",
     config.italic ? "<w:i/>" : "",
@@ -288,6 +333,20 @@ function stylesXml() {
     <w:name w:val="heading 3"/>
     <w:pPr><w:keepNext/><w:spacing w:before="220" w:after="100"/></w:pPr>
     <w:rPr><w:b/><w:i/><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:color w:val="4B5563"/><w:sz w:val="23"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="FieldLabel">
+    <w:name w:val="FieldLabel"/>
+    <w:pPr><w:spacing w:before="180" w:after="40"/></w:pPr>
+    <w:rPr><w:b/><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="LayoutType">
+    <w:name w:val="LayoutType"/>
+    <w:pPr><w:spacing w:before="220" w:after="100"/></w:pPr>
+    <w:rPr><w:b/><w:i/><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:color w:val="4B5563"/><w:sz w:val="23"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="HorizontalRule">
+    <w:name w:val="HorizontalRule"/>
+    <w:pPr><w:spacing w:before="180" w:after="40"/><w:pbdr w:bottom="single" w:color="CCCCCC" w:space="1" w:sz="6"/></w:pPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Tree">
     <w:name w:val="Tree"/>

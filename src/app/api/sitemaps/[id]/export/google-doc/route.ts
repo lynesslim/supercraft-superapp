@@ -163,6 +163,23 @@ function cleanMarkdownLine(line: string) {
     .trimEnd();
 }
 
+function parseFieldLabel(rawLine: string): false | { label: string; content: string; isLayoutType: boolean } {
+  const normalized = rawLine
+    .replace(/^\s*[-*]\s+/, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trimEnd();
+  const match = /^([A-Za-z][A-Za-z0-9 '_\-]{0,39}):\s*(.*)$/.exec(normalized);
+  if (!match) return false;
+  const label = match[1].trim();
+  const content = match[2].trim().replace(/"/g, "");
+  if (content.startsWith("//") || content.startsWith("http")) return false;
+  const isLayoutType = label.toLowerCase() === "layout_type";
+  return { label: label.charAt(0).toUpperCase() + label.slice(1), content, isLayoutType };
+}
+
 function pageTitle(projectName: string, title: string) {
   return `${projectName.toUpperCase()} — ${title.toUpperCase()} PAGE CONTENT`;
 }
@@ -221,9 +238,20 @@ function buildDocument({
         return;
       }
 
+      const field = parseFieldLabel(line);
+      if (field) {
+        if (field.isLayoutType) {
+          append(`[${field.content}]\n`, "HEADING_3");
+        } else {
+          append(`${field.label}\n`, "HEADING_3");
+          if (field.content) append(`${field.content}\n`);
+        }
+        return;
+      }
+
       append(`${cleanMarkdownLine(line)}\n`);
     });
-    append("\n");
+    append("\n────────────────────────────────────────────────────\n");
   });
 
   return { sections, text };
