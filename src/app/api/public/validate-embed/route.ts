@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
   }
 
   const { data: existingRegistration, error: registrationError } = await supabase
-    .from("project_plugin_registration")
+    .from("project_plugin_registrations")
     .select("id")
     .eq("project_id", project.id)
     .eq("plugin_name", pluginName.trim())

@@ -75,7 +75,7 @@ export async function DELETE(request: NextRequest) {
   }
 
   const { error: deleteError } = await supabase
-    .from("project_plugin_registration")
+    .from("project_plugin_registrations")
     .delete()
     .eq("project_id", project.id)
     .eq("plugin_name", pluginName.trim());
