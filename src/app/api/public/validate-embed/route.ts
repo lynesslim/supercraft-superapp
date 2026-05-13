@@ -88,12 +88,26 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const isRegistered = !!existingRegistration;
+  if (!existingRegistration) {
+    const { error: insertError } = await supabase
+      .from("project_plugin_registrations")
+      .insert({
+        project_id: project.id,
+        plugin_name: pluginName.trim(),
+      });
+
+    if (insertError) {
+      return NextResponse.json(
+        { error: insertError.message },
+        { status: 500, headers: CORS_HEADERS },
+      );
+    }
+  }
 
   return NextResponse.json(
     {
       valid: true,
-      registered: isRegistered,
+      registered: true,
       projectId: project.id,
     },
     { headers: CORS_HEADERS },
