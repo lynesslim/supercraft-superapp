@@ -90,21 +90,26 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!existingRegistration) {
-    const { error: insertError } = await supabase
-      .from("project_plugin_registrations")
-      .insert({
-        project_id: project.id,
-        plugin_name: pluginName.trim(),
-        registered_domain: typeof domain === "string" ? domain.trim() : null,
-      });
+  if (existingRegistration) {
+    return NextResponse.json(
+      { error: "Project already registered with this plugin.", valid: false },
+      { status: 409, headers: CORS_HEADERS },
+    );
+  }
 
-    if (insertError) {
-      return NextResponse.json(
-        { error: insertError.message },
-        { status: 500, headers: CORS_HEADERS },
-      );
-    }
+  const { error: insertError } = await supabase
+    .from("project_plugin_registrations")
+    .insert({
+      project_id: project.id,
+      plugin_name: pluginName.trim(),
+      registered_domain: typeof domain === "string" ? domain.trim() : null,
+    });
+
+  if (insertError) {
+    return NextResponse.json(
+      { error: insertError.message },
+      { status: 500, headers: CORS_HEADERS },
+    );
   }
 
   return NextResponse.json(
