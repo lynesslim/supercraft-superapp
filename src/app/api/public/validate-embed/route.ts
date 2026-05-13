@@ -14,6 +14,7 @@ export function OPTIONS() {
 type ValidateEmbedPayload = {
   embed_code?: unknown;
   plugin_name?: unknown;
+  domain?: unknown;
 };
 
 export async function POST(request: NextRequest) {
@@ -29,6 +30,7 @@ export async function POST(request: NextRequest) {
 
   const embedCode = body.embed_code;
   const pluginName = body.plugin_name;
+  const domain = body.domain;
 
   if (typeof embedCode !== "string" || !embedCode.trim()) {
     return NextResponse.json(
@@ -94,6 +96,7 @@ export async function POST(request: NextRequest) {
       .insert({
         project_id: project.id,
         plugin_name: pluginName.trim(),
+        registered_domain: typeof domain === "string" ? domain.trim() : null,
       });
 
     if (insertError) {
