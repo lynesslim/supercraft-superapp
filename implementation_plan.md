@@ -1,74 +1,78 @@
-# Implementation Plan: AI Image Edits & Custom Reference Uploads
+# Implementation Plan: Project Asset Extraction & Curation
 
-This plan outlines the design and implementation for two new features:
-1. **AI Edit inside the Shared Lightbox**: Allowing users to provide feedback on mockups and trigger image edits using `gpt-image-2`.
-2. **Custom Reference Uploads**: Enabling users to upload and use their own reference layouts as styling guides in the Hero Generator.
+This plan outlines the architecture for generating, saving, and editing standalone design assets from hero mockups. It introduces:
+1. A database schema for project assets.
+2. Two new parallel AI extraction pathways (Background extraction and Stylized iconography/asset sheet generation).
+3. Project detail UI workspace tabs for managing design assets.
+4. Prompt Playground integration for customizing asset generation instructions.
 
 ---
 
 ## Proposed Changes
 
-### 1. AI Mockup Editing (Feature 1)
+### 1. Schema & Backend APIs
 
-#### [NEW] [edit/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/edit/route.ts)
-* Create a POST handler to receive `imageUrl`, `projectId` (optional), and `instruction`.
-* Fetch the source image and convert it to a binary Blob.
-* Dispatch an edit request to `openaiBaseUrl/images/edits` using `model: "gpt-image-2"` and the custom feedback instruction.
-* Return the newly edited image URL.
+#### [NEW] [20260602_project_assets.sql](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/supabase/migrations/20260602_project_assets.sql)
+* Create `project_assets` table to store saved assets:
+  ```sql
+  CREATE TABLE IF NOT EXISTS project_assets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    image_url TEXT NOT NULL,
+    asset_type TEXT NOT NULL CHECK (asset_type IN ('background', 'sheet')),
+    prompt_used TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS project_assets_project_id_idx ON project_assets (project_id);
+  ```
+* Seed `system_prompts` with keys:
+  * `extract_background_prompt`: Instructions to remove text/UI layouts and isolate 2K background details.
+  * `extract_iconography_prompt`: Instructions to generate matching UI iconographies on a 9:16 sheet.
 
-#### [MODIFY] [Lightbox.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/components/Lightbox.tsx)
-* Add optional props:
-  * `onAiEdit?: (instruction: string) => Promise<string>`: Handles the submission of an edit instruction, returning the new image URL.
-  * `isEditingImage?: boolean`: Spinner/loading state during editing.
-* Render an **AI Edit** action button below the image.
-* When clicked, toggle an inline text area comment field with **Submit Edit** and **Cancel** buttons.
+#### [NEW] [/api/hero-generator/extract-assets/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/extract-assets/route.ts)
+* Create a POST handler receiving `mockupImageUrl` and `projectId`.
+* Fetch `extract_background_prompt` and `extract_iconography_prompt` from the database.
+* Execute two OpenAI `images/edits` (`gpt-image-2`) tasks in parallel:
+  * **Background Extraction**: Prompt to remove foreground copy/CTA blocks and render a clean, high-resolution background asset at 16:9 (`2048x1152`).
+  * **Iconography Sheet**: Prompt to extract design themes and layout matching icons on a 9:16 asset board (`1152x2048`).
+* Return both URLs and prompts used.
 
-#### [MODIFY] [HeroGeneratorClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/hero-generator/HeroGeneratorClient.tsx)
-* Add UI state `isEditingMockup` to track loading status.
-* Provide `onAiEdit` handler to `<Lightbox>`:
-  * Make a POST fetch to `/api/hero-generator/edit` passing the current option's image URL and the comment.
-  * Append the resulting new mockup option directly into the `mockupOptions` state list.
-  * Keep the lightbox view open or focus the new mockup.
-
-#### [MODIFY] [ProjectDetailClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/projects/%5Bid%5D/ProjectDetailClient.tsx)
-* Provide `onAiEdit` handler to `<Lightbox>`:
-  * Make a POST fetch to `/api/hero-generator/edit` passing the saved mockup URL and the comment.
-  * Automatically save the newly generated edited image to the database by invoking `/api/hero-generator/mockups` with the new image URL, original project ID, theme, accent color, and updated prompt instructions.
-  * Reload `savedMockups` or append the returned mockup record to state.
+#### [NEW] [/api/projects/[id]/assets/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/projects/%5Bid%5D/assets/route.ts)
+* `GET`: Fetch all design assets associated with the project UUID.
+* `POST`: Save generated asset objects into the `project_assets` table.
+* `DELETE`: Remove a design asset record and prompt confirmation.
 
 ---
 
-### 2. Custom Reference Uploads (Feature 2)
+### 2. Frontend User Workspace
 
-#### [NEW] [upload/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/upload/route.ts)
-* Create a POST handler to accept a single image upload.
-* Upload the file to a `custom-references` folder in Supabase Storage.
-* Return the public permanent URL.
+#### [MODIFY] [ProjectDetailClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/projects/%5Bid%5D/ProjectDetailClient.tsx)
+* Add an **Assets** tab alongside Details/Webcopy workspace navigation.
+* In the **Saved Mockups Lightbox**:
+  * Add an **Extract Assets** button.
+  * Trigger parallel generation using `/api/hero-generator/extract-assets`. Show a custom, animated extraction status banner.
+  * Auto-save the results using the project assets POST endpoint.
+* In the **Assets Tab**:
+  * Render background mockups and iconography sheets in a responsive grid layout.
+  * Clicking an asset opens the shared `<Lightbox>` component, allowing users to:
+    * Download high-resolution files.
+    * Use **AI Edit** to customize individual assets (sends request to edit endpoint and saves back to database).
 
-#### [MODIFY] [generate/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/generate/route.ts)
-* Update `GenerateRequest` type to accept `customReferenceUrls?: string[]`.
-* Merge custom references into the parallel layout variation queues during standard generation.
-
-#### [MODIFY] [HeroGeneratorClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/hero-generator/HeroGeneratorClient.tsx)
-* Add `customReferences` array state and `selectedCustomRefs` state.
-* Render a **Custom Reference Upload** panel before the Visual Inspiration Gallery.
-* Support drag-and-drop or file pickers, automatically uploading files to `/api/hero-generator/upload` to store custom reference items.
-* Display custom references as checkable cards alongside the database gallery.
-* Include selected custom reference URLs in the payload dispatched to `/api/hero-generator/generate`.
+#### [MODIFY] [PlaygroundClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/playground/PlaygroundClient.tsx)
+* Add editable system prompt templates for `extract_background_prompt` and `extract_iconography_prompt` to allow prompt tweaking and versioning directly in the Prompt Lab.
 
 ---
 
 ## Verification Plan
 
 ### Automated Tests
-* Confirm compile sanity:
+* Validate compilation check:
   ```bash
   npm run build
   ```
 
 ### Manual Verification
-1. Open the Hero Generator, upload two custom design files in the new upload panel, and select them.
-2. Select three gallery references and hit **Generate 5 Mockups**.
-3. Verify that the generator incorporates the custom images as prompt visual templates.
-4. Click preview on one of the mockups, choose **AI Edit**, type a feedback prompt (e.g. "make the accent colors brighter and add a secondary button"), and submit.
-5. Confirm that the edited mockup is successfully generated and appended to the layouts grid.
+1. Run local environment and open a project details page.
+2. Select any saved mockup in the gallery, click **Extract Assets**, and verify the progress bar cycles correctly.
+3. Confirm that two files appear in the new **Assets Tab** (a clean 16:9 background and a 9:16 icon sheet).
+4. Edit the prompts in the Prompt Playground, trigger extraction again, and verify the edits change the output styles appropriately.

@@ -84,7 +84,7 @@ type ProjectDetailClientProps = {
 };
 
 type EditableField = keyof ProjectDetails;
-type ActiveTab = "overview" | "sitemap" | "mockups";
+type ActiveTab = "overview" | "sitemap" | "mockups" | "assets";
 type ToastState = {
   tone: "info" | "success" | "error";
   message: string;
@@ -265,6 +265,90 @@ export default function ProjectDetailClient({
       setToast({ tone: "error", message: "Failed to remove mockup." });
     }
   }, []);
+
+  // Assets state
+  type ProjectAsset = {
+    id: string;
+    image_url: string;
+    asset_type: "background" | "sheet";
+    prompt_used: string;
+    created_at: string;
+  };
+  const [savedAssets, setSavedAssets] = useState<ProjectAsset[]>([]);
+  const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [isExtractingAssets, setIsExtractingAssets] = useState(false);
+  const [previewAsset, setPreviewAsset] = useState<ProjectAsset | null>(null);
+  const [isEditingAsset, setIsEditingAsset] = useState(false);
+
+  const loadAssets = useCallback(async () => {
+    setIsLoadingAssets(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/assets`);
+      if (res.ok) {
+        const data = await res.json();
+        setSavedAssets(data.assets || []);
+      }
+    } catch (err) {
+      console.error("Failed to load assets:", err);
+    } finally {
+      setIsLoadingAssets(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadAssets();
+  }, [projectId, loadAssets]);
+
+  const handleExtractAssets = useCallback(async (mockupImageUrl: string) => {
+    setIsExtractingAssets(true);
+    setToast({ tone: "info", message: "Extracting background and iconography assets..." });
+    try {
+      const res = await fetch("/api/hero-generator/extract-assets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mockupImageUrl, projectId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.details || "Extraction failed.");
+
+      const saved: ProjectAsset[] = [];
+      for (const asset of data.assets || []) {
+        const saveRes = await fetch(`/api/projects/${projectId}/assets`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageUrl: asset.image_url,
+            assetType: asset.asset_type,
+            promptUsed: asset.prompt_used,
+          }),
+        });
+        if (saveRes.ok) {
+          const saveData = await saveRes.json();
+          if (saveData.asset) saved.push(saveData.asset);
+        }
+      }
+      setSavedAssets(prev => [...saved, ...prev]);
+      setToast({ tone: "success", message: `Extracted ${saved.length} asset(s) successfully!` });
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : "Extraction failed." });
+    } finally {
+      setIsExtractingAssets(false);
+    }
+  }, [projectId]);
+
+  const handleDeleteAsset = useCallback(async (assetId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/assets?assetId=${assetId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setSavedAssets(prev => prev.filter(a => a.id !== assetId));
+        setToast({ tone: "success", message: "Asset removed." });
+      }
+    } catch {
+      setToast({ tone: "error", message: "Failed to remove asset." });
+    }
+  }, [projectId]);
 
   const hasUnsavedChanges = useMemo(
     () => JSON.stringify(savedDetails) !== JSON.stringify(draftDetails),
@@ -755,7 +839,7 @@ export default function ProjectDetailClient({
 
         <div className="flex items-center justify-between gap-3 rounded-full border border-white/8 bg-[#181a16] p-1">
           <div className="flex gap-1">
-            {(["overview", "sitemap", "mockups"] as ActiveTab[]).map((tab) => (
+            {(["overview", "sitemap", "mockups", "assets"] as ActiveTab[]).map((tab) => (
               <button
                   className={`motion-lift inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] transition ${
                   activeTab === tab
@@ -766,7 +850,7 @@ export default function ProjectDetailClient({
                 onClick={() => setActiveTab(tab)}
                 type="button"
               >
-                {tab === "overview" ? <FileText size={14} /> : tab === "sitemap" ? <LayoutList size={14} /> : <Sparkles size={14} />}
+                {tab === "overview" ? <FileText size={14} /> : tab === "sitemap" ? <LayoutList size={14} /> : tab === "mockups" ? <Sparkles size={14} /> : <Download size={14} />}
                 {tab}
               </button>
             ))}
@@ -1135,6 +1219,88 @@ export default function ProjectDetailClient({
               </div>
             )}
           </section>
+        ) : activeTab === "assets" ? (
+          <section className="motion-fade-in rounded-2xl border border-white/8 bg-[#1b1d19] p-5 shadow-2xl shadow-black/25">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-white/5 pb-4">
+              <div>
+                <h2 className="text-lg font-bold text-[#f4f6ea]">Project Design Assets</h2>
+                <p className="text-xs text-white/40">Extracted backgrounds and iconography sheets from hero mockups</p>
+              </div>
+            </div>
+
+            {isLoadingAssets ? (
+              <div className="flex flex-col items-center justify-center py-20 text-white/45">
+                <Loader2 className="animate-spin text-[#a3b840]" size={32} />
+                <p className="mt-4 text-sm font-semibold">Loading assets...</p>
+              </div>
+            ) : savedAssets.length > 0 ? (
+              <div className="mt-6 columns-2 sm:columns-3 gap-6 [column-fill:_balance]">
+                {savedAssets.map((asset) => (
+                  <article
+                    key={asset.id}
+                    className="break-inside-avoid mb-6 group relative overflow-hidden rounded-xl border border-white/10 bg-[#111310]/60 transition duration-300 hover:border-white/20 w-full"
+                  >
+                    <div
+                      onClick={() => setPreviewAsset(asset)}
+                      className="relative block w-full bg-black/40 overflow-hidden cursor-zoom-in"
+                    >
+                      <img
+                        src={asset.image_url}
+                        alt={`${asset.asset_type} asset`}
+                        className="w-full h-auto block transition duration-500 group-hover:scale-105"
+                      />
+                    </div>
+                    <div className="absolute inset-0 bg-black/60 opacity-0 transition duration-300 group-hover:opacity-100 flex items-center justify-center pointer-events-none">
+                      <div className="flex gap-3 pointer-events-auto">
+                        <a
+                          href={asset.image_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-3 bg-white/10 hover:bg-white/25 rounded-full text-white backdrop-blur-md transition"
+                          title="Open Asset in New Tab"
+                        >
+                          <ExternalLink size={16} />
+                        </a>
+                        <a
+                          href={asset.image_url}
+                          download={`project-asset-${asset.id}.png`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-3 bg-white/10 hover:bg-white/25 rounded-full text-white backdrop-blur-md transition"
+                          title="Download Asset"
+                        >
+                          <Download size={16} />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => { void handleDeleteAsset(asset.id); }}
+                          className="p-3 bg-red-500/20 hover:bg-red-500/40 rounded-full text-red-200 backdrop-blur-md transition"
+                          title="Delete Asset"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="p-4 border-t border-white/5">
+                      <div className="flex items-center justify-between">
+                        <span className="rounded-full bg-white/8 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white/60">
+                          {asset.asset_type === "background" ? "Background" : "Iconography Sheet"}
+                        </span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-center text-white/35 border border-dashed border-white/10 rounded-xl mt-6 bg-black/10">
+                <Download className="text-white/20" size={40} />
+                <h3 className="mt-4 text-sm font-bold text-[#f4f6ea]">No assets extracted yet</h3>
+                <p className="mt-1.5 text-xs max-w-xs leading-normal">
+                  Open a saved mockup preview and use the "Extract Assets" button to generate background and iconography assets.
+                </p>
+              </div>
+            )}
+          </section>
         ) : (
           <section className="grid h-[calc(100vh-210px)] min-h-[560px] gap-4 overflow-hidden rounded-2xl border border-white/8 bg-[#1b1d19] p-4 shadow-2xl shadow-black/25 lg:grid-cols-[340px_minmax(0,1fr)]">
             <div className="flex min-h-0 flex-col">
@@ -1271,6 +1437,19 @@ export default function ProjectDetailClient({
                     <span className="font-mono text-xs text-white/60">{previewMockup.accent_color}</span>
                   </div>
                 )}
+                <button
+                  type="button"
+                  disabled={isExtractingAssets}
+                  onClick={() => { void handleExtractAssets(previewMockup.image_url); }}
+                  className="inline-flex items-center gap-2 rounded-lg border border-[#a3b840]/30 bg-[#1a1c16] px-4 py-2 text-xs font-semibold text-[#a3b840] transition hover:bg-[#222420] disabled:opacity-50"
+                >
+                  {isExtractingAssets ? (
+                    <Loader2 className="animate-spin" size={14} />
+                  ) : (
+                    <Download size={14} />
+                  )}
+                  {isExtractingAssets ? "Extracting..." : "Extract Assets"}
+                </button>
                 <a
                   href={previewMockup.image_url}
                   download={`project-hero-${previewMockup.id}.png`}
@@ -1287,6 +1466,81 @@ export default function ProjectDetailClient({
               <p className="text-[10px] font-bold uppercase tracking-wider text-white/35">Prompt & Instructions Used</p>
               <p className="mt-2 text-xs font-mono text-white/65 leading-relaxed bg-black/50 p-3 rounded-lg border border-white/5 whitespace-pre-wrap select-all">
                 {previewMockup.prompt_used}
+              </p>
+            </div>
+          </div>
+        </Lightbox>
+      )}
+
+      {previewAsset && (
+        <Lightbox
+          imageUrl={previewAsset.image_url}
+          altText={`${previewAsset.asset_type} asset`}
+          isEditingImage={isEditingAsset}
+          onAiEdit={async (instruction) => {
+            setIsEditingAsset(true);
+            try {
+              const res = await fetch("/api/hero-generator/edit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  imageUrl: previewAsset.image_url,
+                  instruction,
+                }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || data.details || "Edit failed.");
+
+              const saveRes = await fetch(`/api/projects/${projectId}/assets`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  imageUrl: data.imageUrl,
+                  assetType: previewAsset.asset_type,
+                  promptUsed: data.prompt,
+                }),
+              });
+              const saveData = await saveRes.json();
+              if (!saveRes.ok) throw new Error(saveData.error || "Auto-save failed.");
+
+              setSavedAssets((prev) => [saveData.asset, ...prev]);
+              setPreviewAsset(saveData.asset);
+              setToast({ tone: "success", message: "AI edit saved as new asset." });
+              return data.imageUrl;
+            } catch (err) {
+              setToast({ tone: "error", message: err instanceof Error ? err.message : "Edit failed." });
+              return "";
+            } finally {
+              setIsEditingAsset(false);
+            }
+          }}
+          onClose={() => setPreviewAsset(null)}
+        >
+          <div className="mt-4 w-full rounded-xl border border-white/5 bg-[#111310]/80 p-5 backdrop-blur-md text-[#f4f6ea] max-w-full">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+              <div>
+                <h4 className="text-sm font-bold text-[#a3b840]">
+                  {previewAsset.asset_type === "background" ? "Background Asset" : "Iconography Sheet"}
+                </h4>
+                <p className="text-xs text-white/40 mt-0.5">Extracted from hero mockup</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <a
+                  href={previewAsset.image_url}
+                  download={`project-asset-${previewAsset.id}.png`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 rounded-lg bg-[#a3b840] px-4 py-2 text-xs font-bold text-[#171a12] transition hover:bg-[#b5cc4a]"
+                >
+                  <Download size={14} />
+                  Download
+                </a>
+              </div>
+            </div>
+            <div className="mt-4 border-t border-white/5 pt-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/35">Extraction Prompt</p>
+              <p className="mt-2 text-xs font-mono text-white/65 leading-relaxed bg-black/50 p-3 rounded-lg border border-white/5 whitespace-pre-wrap select-all">
+                {previewAsset.prompt_used}
               </p>
             </div>
           </div>

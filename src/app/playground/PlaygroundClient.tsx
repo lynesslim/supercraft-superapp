@@ -31,7 +31,16 @@ const fallbackPrompts: PromptRow[] = [
     prompt_text:
       "You are a world-class UI/UX visual designer specializing in modern, high-end hero sections. Generate a premium, production-grade website hero section mockup. It should look like a highly detailed Dribbble/Behance showcase or a real screenshot of a premium landing page. Fully render realistic typographic layouts, clear text, fine navigation details, high-end icons, and interactive elements. Avoid generic stock photos; make the visuals feel customized and luxurious. Accent color: {{accent_color}}. Theme: {{theme}}. Additional instructions: {{additionalinstruction}}.",
   },
-
+  {
+    name: "extract_background_prompt",
+    prompt_text:
+      "You are a senior visual designer. Given the attached hero mockup image, remove all foreground UI elements, text overlays, CTAs, navigation bars, and copy blocks. Extract only the clean, high-resolution background visual. Render it as a polished 2K-quality background asset suitable for a premium website. Do not include any text, buttons, or interface elements. Return only the refined background image at 16:9.",
+  },
+  {
+    name: "extract_iconography_prompt",
+    prompt_text:
+      "You are a senior UI icon designer. Study the attached hero mockup image and extract its core design themes — color palette, visual style, motifs, and layout language. Generate a matching set of stylized UI iconography and decorative visual elements arranged on a 9:16 mood board asset sheet. The icons should feel cohesive, premium, and aligned with the mockup aesthetic. Return only the asset sheet with iconography.",
+  },
 ];
 
 const samples = {
@@ -49,6 +58,10 @@ const samples = {
     "Selected text: Our tyre services are fast and affordable. Task: make it more premium, specific, and trustworthy while keeping it short.",
   hero_mockup_prompt:
     "Accent color: #a3b840. Theme: dark. Inspired by the following aesthetic styles: Minimalist Architecture (Clean, Split-Screen), Luxury Dark Portfolio.",
+  extract_background_prompt:
+    "Extract the background from a luxury brand hero mockup. Remove all text and UI overlays. Output a clean 16:9 background asset.",
+  extract_iconography_prompt:
+    "Generate matching UI iconography based on a luxury brand hero mockup. Create a 9:16 asset sheet with cohesive premium icon set.",
 };
 
 const promptLabels: Record<string, string> = {
@@ -59,6 +72,8 @@ const promptLabels: Record<string, string> = {
   webcopy_refinement: "Copy Refiner",
   webcopy_generator: "Webcopy Director",
   hero_mockup_prompt: "Hero Mockup Strategist",
+  extract_background_prompt: "Background Extractor",
+  extract_iconography_prompt: "Iconography Extractor",
 };
 
 const MAX_PLAYGROUND_PDF_BYTES = 60 * 1024 * 1024;
