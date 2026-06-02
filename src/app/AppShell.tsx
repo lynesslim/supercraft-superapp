@@ -1,6 +1,6 @@
 "use client";
 
-import { FlaskConical, LayoutDashboard, LogOut, Network } from "lucide-react";
+import { FlaskConical, LayoutDashboard, LogOut, Network, Sparkles } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -17,6 +17,11 @@ const navItems = [
     href: "/canvas",
     label: "Canvas",
     icon: Network,
+  },
+  {
+    href: "/hero-generator",
+    label: "Hero Generator",
+    icon: Sparkles,
   },
   {
     href: "/playground",

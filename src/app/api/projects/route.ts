@@ -446,6 +446,25 @@ async function insertProject({
   return { projectId: fallback.data.id as string, usedFallbackContext: true, strategyPayload };
 }
 
+export async function GET(request: Request) {
+  const authError = await requireApiRole(["superadmin", "employee"]);
+  if (authError) return authError;
+  const limited = rateLimitByRequest(request, "projects:get", { limit: 120, windowMs: 60_000 });
+  if (limited) return limited;
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from("projects")
+    .select("id, name, logo_url, accent_color")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ projects: data ?? [] });
+}
+
 export async function POST(request: Request) {
   const authError = await requireApiRole(["superadmin", "employee"]);
   if (authError) return authError;

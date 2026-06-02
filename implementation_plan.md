@@ -1,72 +1,74 @@
-# AI-powered Sitemap & Webcopy Builder
+# Implementation Plan: AI Image Edits & Custom Reference Uploads
 
-This document outlines the architecture and implementation plan for the AI-powered Sitemap and Webcopy builder. The tool will take a client's brief, generate an editable sitemap, and subsequently produce webcopy for each page based on strict, customizable system prompts.
+This plan outlines the design and implementation for two new features:
+1. **AI Edit inside the Shared Lightbox**: Allowing users to provide feedback on mockups and trigger image edits using `gpt-image-2`.
+2. **Custom Reference Uploads**: Enabling users to upload and use their own reference layouts as styling guides in the Hero Generator.
 
-## User Review Required
+---
 
-> [!IMPORTANT]
-> Please review the technology stack and the proposed features below. Once approved, you can hand this plan (or the upcoming tasks) to the OpenCode extension for execution.
+## Proposed Changes
 
-## Proposed Architecture
+### 1. AI Mockup Editing (Feature 1)
 
-- **Framework**: Next.js (App Router) for an intuitive and smooth experience.
-- **Styling**: Tailwind CSS (for rapid, responsive, and premium UI design)
-- **State Management**: React Context / Hooks
-- **Backend API**: Next.js Route Handlers (`/api/*`)
-- **Database/Backend**: Supabase (PostgreSQL, Auth, and Storage)
-- **AI Integration**: Vercel AI SDK (or similar agnostic abstraction) to allow flexibility in choosing the underlying AI provider (OpenAI, Anthropic, Gemini, etc.)
+#### [NEW] [edit/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/edit/route.ts)
+* Create a POST handler to receive `imageUrl`, `projectId` (optional), and `instruction`.
+* Fetch the source image and convert it to a binary Blob.
+* Dispatch an edit request to `openaiBaseUrl/images/edits` using `model: "gpt-image-2"` and the custom feedback instruction.
+* Return the newly edited image URL.
 
-## Key Features & User Flow
+#### [MODIFY] [Lightbox.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/components/Lightbox.tsx)
+* Add optional props:
+  * `onAiEdit?: (instruction: string) => Promise<string>`: Handles the submission of an edit instruction, returning the new image URL.
+  * `isEditingImage?: boolean`: Spinner/loading state during editing.
+* Render an **AI Edit** action button below the image.
+* When clicked, toggle an inline text area comment field with **Submit Edit** and **Cancel** buttons.
 
-### 1. Project Setup & Brief Input
-- A clean, modern dashboard to start a new project.
-- A brief input form supporting both text entry and PDF file upload.
+#### [MODIFY] [HeroGeneratorClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/hero-generator/HeroGeneratorClient.tsx)
+* Add UI state `isEditingMockup` to track loading status.
+* Provide `onAiEdit` handler to `<Lightbox>`:
+  * Make a POST fetch to `/api/hero-generator/edit` passing the current option's image URL and the comment.
+  * Append the resulting new mockup option directly into the `mockupOptions` state list.
+  * Keep the lightbox view open or focus the new mockup.
 
-### 2. Sitemap Generation & Approval
-- Sends the brief + the "Sitemap System Prompt" to the AI.
-- AI returns a structured JSON representing the sitemap structure.
-- The UI renders this sitemap visually as an interactive node graph (e.g., using React Flow).
-- The user can add, remove, or rename pages before giving final approval.
+#### [MODIFY] [ProjectDetailClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/projects/%5Bid%5D/ProjectDetailClient.tsx)
+* Provide `onAiEdit` handler to `<Lightbox>`:
+  * Make a POST fetch to `/api/hero-generator/edit` passing the saved mockup URL and the comment.
+  * Automatically save the newly generated edited image to the database by invoking `/api/hero-generator/mockups` with the new image URL, original project ID, theme, accent color, and updated prompt instructions.
+  * Reload `savedMockups` or append the returned mockup record to state.
 
-### 3. Webcopy Generation
-- Iterates through the approved sitemap.
-- Sends the context (Brief + Specific Page Info) + the "Webcopy System Prompt" to the AI.
-- Displays the generated copy in a split-pane editor (Sitemap on the left, rich-text copy on the right).
+---
 
-### 4. Admin Panel / System Prompt Playground
-- A dedicated route (`/admin` or `/playground`).
-- Interface to edit the strict rules (System Prompts) for both Sitemap and Webcopy generation.
-- A "Test" area to input a mock brief and see the AI's output using the drafted prompt, without affecting real client projects.
+### 2. Custom Reference Uploads (Feature 2)
 
-## Implementation Phases (For OpenCode)
+#### [NEW] [upload/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/upload/route.ts)
+* Create a POST handler to accept a single image upload.
+* Upload the file to a `custom-references` folder in Supabase Storage.
+* Return the public permanent URL.
 
-### Phase 1: Project Initialization & UI Shell
-- Initialize the Next.js project.
-- Setup global CSS, custom fonts, and aesthetic design tokens.
-- Build the main application shell (Sidebar/Navbar).
+#### [MODIFY] [generate/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/generate/route.ts)
+* Update `GenerateRequest` type to accept `customReferenceUrls?: string[]`.
+* Merge custom references into the parallel layout variation queues during standard generation.
 
-### Phase 2: The Playground & Prompts Data Layer
-- Implement the storage mechanism for System Prompts.
-- Build the Admin Playground interface to edit and test prompts.
-- Create the generic API route `/api/generate` that wraps the AI calls.
-
-### Phase 3: The Brief & Sitemap Builder
-- Build the brief input form.
-- Implement the AI call for sitemap generation.
-- Build the interactive, editable sitemap UI.
-
-### Phase 4: The Webcopy Generator
-- Implement the looping logic to generate copy per page.
-- Build the Webcopy viewer/editor UI.
+#### [MODIFY] [HeroGeneratorClient.tsx](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/hero-generator/HeroGeneratorClient.tsx)
+* Add `customReferences` array state and `selectedCustomRefs` state.
+* Render a **Custom Reference Upload** panel before the Visual Inspiration Gallery.
+* Support drag-and-drop or file pickers, automatically uploading files to `/api/hero-generator/upload` to store custom reference items.
+* Display custom references as checkable cards alongside the database gallery.
+* Include selected custom reference URLs in the payload dispatched to `/api/hero-generator/generate`.
 
 ---
 
 ## Verification Plan
 
 ### Automated Tests
-- N/A for initial prototype unless specifically requested.
+* Confirm compile sanity:
+  ```bash
+  npm run build
+  ```
 
 ### Manual Verification
-- Navigate to the playground and confirm prompts can be saved and tested.
-- Enter a dummy brief and verify that a sitemap is successfully created and rendered.
-- Approve the sitemap and verify that copy is generated for each node.
+1. Open the Hero Generator, upload two custom design files in the new upload panel, and select them.
+2. Select three gallery references and hit **Generate 5 Mockups**.
+3. Verify that the generator incorporates the custom images as prompt visual templates.
+4. Click preview on one of the mockups, choose **AI Edit**, type a feedback prompt (e.g. "make the accent colors brighter and add a secondary button"), and submit.
+5. Confirm that the edited mockup is successfully generated and appended to the layouts grid.

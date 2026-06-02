@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { createPortal } from "react-dom";
 import {
+  ArrowRight,
   Check,
   Download,
   Edit3,
@@ -15,11 +17,13 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import BackButton from "@/app/BackButton";
 import { createClient } from "@/utils/supabase/client";
+import Lightbox from "../../components/Lightbox";
 
 const MAX_LARGE_PDF_BYTES = 60 * 1024 * 1024;
 const MAX_LARGE_PDF_FILES = 4;
@@ -80,11 +84,20 @@ type ProjectDetailClientProps = {
 };
 
 type EditableField = keyof ProjectDetails;
-type ActiveTab = "overview" | "sitemap";
+type ActiveTab = "overview" | "sitemap" | "mockups";
 type ToastState = {
   tone: "info" | "success" | "error";
   message: string;
 } | null;
+
+type ProjectHeroMockup = {
+  id: string;
+  image_url: string;
+  prompt_used: string;
+  accent_color: string | null;
+  theme: string;
+  created_at: string;
+};
 
 const FIELD_LABELS: Record<EditableField, string> = {
   additional_details: "Additional Details",
@@ -201,6 +214,57 @@ export default function ProjectDetailClient({
   const [selectedPageId, setSelectedPageId] = useState(() =>
     pickInitialPage(sitemapPages, initialCopies),
   );
+
+  // Saved Mockups state
+  const [savedMockups, setSavedMockups] = useState<ProjectHeroMockup[]>([]);
+  const [isLoadingMockups, setIsLoadingMockups] = useState(false);
+  const [previewMockup, setPreviewMockup] = useState<ProjectHeroMockup | null>(null);
+  const [mockupToDelete, setMockupToDelete] = useState<string | null>(null);
+  const [isEditingMockup, setIsEditingMockup] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const loadSavedMockups = useCallback(async () => {
+    console.log("loadSavedMockups called, projectId:", projectId);
+    setIsLoadingMockups(true);
+    try {
+      const res = await fetch(`/api/hero-generator/mockups?projectId=${projectId}`);
+      console.log("loadSavedMockups response status:", res.status);
+      if (res.ok) {
+        const data = await res.json();
+        console.log("loadSavedMockups data loaded:", data);
+        setSavedMockups(data.mockups || []);
+      } else {
+        console.warn("loadSavedMockups response not ok:", res.statusText);
+      }
+    } catch (err) {
+      console.error("Failed to load mockups:", err);
+    } finally {
+      console.log("loadSavedMockups setting isLoadingMockups to false");
+      setIsLoadingMockups(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadSavedMockups();
+  }, [projectId, loadSavedMockups]);
+
+  const handleDeleteMockup = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/hero-generator/mockups?id=${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        setSavedMockups(prev => prev.filter(m => m.id !== id));
+        setToast({ tone: "success", message: "Mockup removed successfully." });
+      }
+    } catch {
+      setToast({ tone: "error", message: "Failed to remove mockup." });
+    }
+  }, []);
 
   const hasUnsavedChanges = useMemo(
     () => JSON.stringify(savedDetails) !== JSON.stringify(draftDetails),
@@ -691,7 +755,7 @@ export default function ProjectDetailClient({
 
         <div className="flex items-center justify-between gap-3 rounded-full border border-white/8 bg-[#181a16] p-1">
           <div className="flex gap-1">
-            {(["overview", "sitemap"] as ActiveTab[]).map((tab) => (
+            {(["overview", "sitemap", "mockups"] as ActiveTab[]).map((tab) => (
               <button
                   className={`motion-lift inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] transition ${
                   activeTab === tab
@@ -702,7 +766,7 @@ export default function ProjectDetailClient({
                 onClick={() => setActiveTab(tab)}
                 type="button"
               >
-                {tab === "overview" ? <FileText size={14} /> : <LayoutList size={14} />}
+                {tab === "overview" ? <FileText size={14} /> : tab === "sitemap" ? <LayoutList size={14} /> : <Sparkles size={14} />}
                 {tab}
               </button>
             ))}
@@ -960,6 +1024,117 @@ export default function ProjectDetailClient({
             </aside>
             ) : null}
           </section>
+        ) : activeTab === "mockups" ? (
+          <section className="motion-fade-in rounded-2xl border border-white/8 bg-[#1b1d19] p-5 shadow-2xl shadow-black/25">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-white/5 pb-4">
+              <div>
+                <h2 className="text-lg font-bold text-[#f4f6ea]">Saved Hero Mockups</h2>
+                <p className="text-xs text-white/40">Premium layout directions generated for this project via gpt-image-2</p>
+              </div>
+              <Link
+                href="/hero-generator"
+                className="mt-3 sm:mt-0 inline-flex items-center gap-2 rounded-full bg-[#a3b840] px-4 py-2 text-xs font-bold text-[#171a12] transition hover:bg-[#b5cc4a]"
+              >
+                <Sparkles size={12} />
+                Generate More
+              </Link>
+            </div>
+
+            {isLoadingMockups ? (
+              <div className="flex flex-col items-center justify-center py-20 text-white/45">
+                <Loader2 className="animate-spin text-[#a3b840]" size={32} />
+                <p className="mt-4 text-sm font-semibold">Loading saved mockups...</p>
+              </div>
+            ) : savedMockups.length > 0 ? (
+              <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                {savedMockups.map((mockup) => (
+                  <article 
+                    key={mockup.id} 
+                    className="group relative overflow-hidden rounded-xl border border-white/10 bg-[#111310]/60 transition duration-300 hover:border-white/20"
+                  >
+                    <div 
+                      onClick={() => setPreviewMockup(mockup)}
+                      className="relative block w-full bg-black/40 overflow-hidden cursor-zoom-in"
+                    >
+                      <img 
+                        src={mockup.image_url} 
+                        alt="Saved Mockup" 
+                        className="w-full h-auto block transition duration-500 group-hover:scale-105"
+                      />
+                    </div>
+                    {/* Sibling Overlay Actions (Separate layer to eliminate nested link conflicts) */}
+                    <div className="absolute inset-0 bg-black/60 opacity-0 transition duration-300 group-hover:opacity-100 flex items-center justify-center pointer-events-none">
+                      <div className="flex gap-3 pointer-events-auto">
+                        <a
+                          href={mockup.image_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-3 bg-white/10 hover:bg-white/25 rounded-full text-white backdrop-blur-md transition"
+                          title="Open Mockup in New Tab"
+                        >
+                          <ExternalLink size={16} />
+                        </a>
+                        <a
+                          href={mockup.image_url}
+                          download={`project-hero-${mockup.id}.png`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-3 bg-white/10 hover:bg-white/25 rounded-full text-white backdrop-blur-md transition"
+                          title="Download Mockup"
+                        >
+                          <Download size={16} />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => setMockupToDelete(mockup.id)}
+                          className="p-3 bg-red-500/20 hover:bg-red-500/40 rounded-full text-red-200 backdrop-blur-md transition"
+                          title="Delete Mockup"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    
+                    <div className="p-4 border-t border-white/5">
+                      <div className="flex justify-between items-center text-xs font-bold text-[#f4f6ea]">
+                        <span>Theme: <span className="capitalize text-[#a3b840]">{mockup.theme}</span></span>
+                        {mockup.accent_color && (
+                          <div className="flex items-center gap-1.5">
+                            <span 
+                              className="h-3 w-3 rounded-full border border-white/20" 
+                              style={{ backgroundColor: mockup.accent_color }}
+                            />
+                            <span className="font-mono text-[10px] text-white/50">{mockup.accent_color}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="mt-3 rounded-lg bg-black/40 p-3 border border-white/5">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-white/35">Generation Prompt</p>
+                        <p className="mt-1.5 text-xs text-white/60 leading-relaxed font-mono line-clamp-3 hover:line-clamp-none transition duration-300">
+                          {mockup.prompt_used}
+                        </p>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-center text-white/35 border border-dashed border-white/10 rounded-xl mt-6 bg-black/10">
+                <Sparkles className="text-white/20" size={40} />
+                <h3 className="mt-4 text-sm font-bold text-[#f4f6ea]">No mockups saved yet</h3>
+                <p className="mt-1.5 text-xs max-w-xs leading-normal">
+                  Launch the Hero Generator, choose styling blueprints, and save your mockup designs straight to this project!
+                </p>
+                <Link
+                  href="/hero-generator"
+                  className="mt-5 inline-flex items-center gap-2 rounded-full bg-[#a3b840]/10 border border-[#a3b840]/25 px-4 py-2 text-xs font-bold text-[#c8db5a] hover:bg-[#a3b840]/20 transition"
+                >
+                  Go to Hero Generator
+                  <ArrowRight size={12} />
+                </Link>
+              </div>
+            )}
+          </section>
         ) : (
           <section className="grid h-[calc(100vh-210px)] min-h-[560px] gap-4 overflow-hidden rounded-2xl border border-white/8 bg-[#1b1d19] p-4 shadow-2xl shadow-black/25 lg:grid-cols-[340px_minmax(0,1fr)]">
             <div className="flex min-h-0 flex-col">
@@ -1034,6 +1209,130 @@ export default function ProjectDetailClient({
           </section>
         )}
       </div>
+
+      {previewMockup && (
+        <Lightbox
+          imageUrl={previewMockup.image_url}
+          isEditingImage={isEditingMockup}
+          onAiEdit={async (instruction) => {
+            setIsEditingMockup(true);
+            try {
+              const res = await fetch("/api/hero-generator/edit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  imageUrl: previewMockup.image_url,
+                  instruction,
+                }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || data.details || "Edit failed.");
+
+              const saveRes = await fetch("/api/hero-generator/mockups", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  projectId,
+                  imageUrl: data.imageUrl,
+                  promptUsed: data.prompt,
+                  accentColor: previewMockup.accent_color,
+                  theme: previewMockup.theme,
+                }),
+              });
+              const saveData = await saveRes.json();
+              if (!saveRes.ok) throw new Error(saveData.error || "Auto-save failed.");
+
+              setSavedMockups((prev) => [saveData.mockup, ...prev]);
+              setPreviewMockup(saveData.mockup);
+              setToast({ tone: "success", message: "AI edit saved as new mockup." });
+              return data.imageUrl;
+            } catch (err) {
+              setToast({ tone: "error", message: err instanceof Error ? err.message : "Edit failed." });
+              return "";
+            } finally {
+              setIsEditingMockup(false);
+            }
+          }}
+          onClose={() => setPreviewMockup(null)}
+        >
+          <div className="mt-4 w-full rounded-xl border border-white/5 bg-[#111310]/80 p-5 backdrop-blur-md text-[#f4f6ea] max-w-full">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+              <div>
+                <h4 className="text-sm font-bold text-[#a3b840]">Saved Mockup Preview</h4>
+                <p className="text-xs text-white/40 mt-0.5">Theme: <span className="capitalize text-white/70">{previewMockup.theme}</span></p>
+              </div>
+              <div className="flex items-center gap-3">
+                {previewMockup.accent_color && (
+                  <div className="flex items-center gap-1.5 bg-black/40 border border-white/5 px-3 py-1.5 rounded-lg">
+                    <span 
+                      className="h-3.5 w-3.5 rounded-full border border-white/20" 
+                      style={{ backgroundColor: previewMockup.accent_color }}
+                    />
+                    <span className="font-mono text-xs text-white/60">{previewMockup.accent_color}</span>
+                  </div>
+                )}
+                <a
+                  href={previewMockup.image_url}
+                  download={`project-hero-${previewMockup.id}.png`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 rounded-lg bg-[#a3b840] px-4 py-2 text-xs font-bold text-[#171a12] transition hover:bg-[#b5cc4a]"
+                >
+                  <Download size={14} />
+                  Download Full Resolution
+                </a>
+              </div>
+            </div>
+            <div className="mt-4 border-t border-white/5 pt-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-white/35">Prompt & Instructions Used</p>
+              <p className="mt-2 text-xs font-mono text-white/65 leading-relaxed bg-black/50 p-3 rounded-lg border border-white/5 whitespace-pre-wrap select-all">
+                {previewMockup.prompt_used}
+              </p>
+            </div>
+          </div>
+        </Lightbox>
+      )}
+
+      {mounted && mockupToDelete && createPortal(
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md animate-fade-in"
+          onClick={() => setMockupToDelete(null)}
+        >
+          <div 
+            className="w-full max-w-md rounded-2xl border border-white/15 bg-zinc-950 p-6 shadow-2xl shadow-black/85 animate-scale-up"
+            style={{ backgroundColor: '#121411' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-extrabold text-white flex items-center gap-2">
+              <Trash2 className="text-red-400" size={20} />
+              Confirm Mockup Deletion
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-white/80">
+              Are you sure you want to permanently delete this hero mockup blueprint? This action is irreversible and will remove the file from storage and database.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setMockupToDelete(null)}
+                className="rounded-full bg-white/5 hover:bg-white/10 px-5 py-2.5 text-xs font-bold text-white transition border border-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleDeleteMockup(mockupToDelete);
+                  setMockupToDelete(null);
+                }}
+                className="rounded-full bg-red-500 hover:bg-red-600 px-5 py-2.5 text-xs font-bold text-white transition shadow-lg shadow-red-500/10"
+              >
+                Permanently Delete
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </main>
   );
 }
