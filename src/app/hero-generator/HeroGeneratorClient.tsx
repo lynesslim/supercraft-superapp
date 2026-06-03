@@ -220,35 +220,55 @@ export default function HeroGeneratorClient() {
 
   function handleGenerate() {
     setErrorNotice("");
-    setNotice("Crafting 5 premium layout prompts and launching gpt-image-2 generators in parallel...");
+    setNotice("Crafting premium layout prompts and launching gpt-image-2 generators sequentially...");
     setMockupOptions([]);
     setShowResultsView(true);
 
     startGenerating(async () => {
       try {
-        const response = await fetch("/api/hero-generator/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            projectId: selectedProjectId,
-            referenceIds: selectedRefs,
-            theme: themePreference,
-            accentColor,
-            logoUrl: customLogoUrl || null,
-            additionalInstruction,
-            customReferenceUrls: selectedCustomRefs.length > 0 ? selectedCustomRefs : undefined,
-          })
-        });
+        let itemsToProcess: { type: "db" | "custom", idOrUrl: string }[] = [];
+        
+        selectedRefs.forEach(id => itemsToProcess.push({ type: "db", idOrUrl: id }));
+        selectedCustomRefs.forEach(url => itemsToProcess.push({ type: "custom", idOrUrl: url }));
+        
+        if (itemsToProcess.length === 0) {
+           references.slice(0, 5).forEach(r => itemsToProcess.push({ type: "db", idOrUrl: r.id }));
+        }
+        
+        itemsToProcess = itemsToProcess.slice(0, 5);
+        const generatedOptions: any[] = [];
+        
+        for (let i = 0; i < itemsToProcess.length; i++) {
+          setNotice(`Generating mockup ${i + 1} of ${itemsToProcess.length}... this may take a few seconds.`);
+          const item = itemsToProcess[i];
+          
+          const response = await fetch("/api/hero-generator/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              projectId: selectedProjectId,
+              referenceIds: item.type === "db" ? [item.idOrUrl] : [],
+              theme: themePreference,
+              accentColor,
+              logoUrl: customLogoUrl || null,
+              additionalInstruction,
+              customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
+            })
+          });
 
-
-
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.details ? `${data.error} Details: ${data.details}` : data.error || "Failed to generate mockups.");
+          const data = await response.json();
+          if (!response.ok) {
+            console.error(`Generation ${i+1} failed:`, data);
+            throw new Error(data.details ? `${data.error} Details: ${data.details}` : data.error || `Failed to generate mockup ${i+1}.`);
+          }
+          
+          if (data.options && data.options.length > 0) {
+             generatedOptions.push(...data.options);
+             setMockupOptions([...generatedOptions]);
+          }
         }
 
-        setMockupOptions(data.options || []);
-        setNotice("Successfully generated 5 options! Pick your favorites to save.");
+        setNotice("Successfully generated options! Pick your favorites to save.");
       } catch (err) {
         setErrorNotice(err instanceof Error ? err.message : String(err));
         setNotice("");
