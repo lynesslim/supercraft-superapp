@@ -14,8 +14,35 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const limit = parseInt(url.searchParams.get("limit") || "15", 10);
   const offset = parseInt(url.searchParams.get("offset") || "0", 10);
+  const seedParam = url.searchParams.get("seed");
 
   const supabase = createAdminClient();
+
+  if (seedParam) {
+    // If randomizing, fetch all and slice deterministically
+    const { data, error } = await supabase
+      .from("hero_references")
+      .select("id, title, image_url, tags, theme");
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    if (data) {
+      let currentSeed = parseFloat(seedParam);
+      // Deterministic Fisher-Yates shuffle using Linear Congruential Generator
+      let m = data.length, t, i;
+      while (m) {
+        currentSeed = (currentSeed * 9301 + 49297) % 233280;
+        i = Math.floor((currentSeed / 233280) * m--);
+        t = data[m];
+        data[m] = data[i];
+        data[i] = t;
+      }
+      return NextResponse.json({ references: data.slice(offset, offset + limit) });
+    }
+  }
+
   const { data, error } = await supabase
     .from("hero_references")
     .select("id, title, image_url, tags, theme")

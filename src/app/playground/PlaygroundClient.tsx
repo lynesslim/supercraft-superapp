@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, useCallback } from "react";
 import Link from "next/link";
 
 type PromptRow = {
@@ -134,14 +134,23 @@ export default function PlaygroundPage() {
   const [galleryNotice, setGalleryNotice] = useState("");
   const [uploadingFiles, setUploadingFiles] = useState<Array<{ file: File; title: string; theme: string; tagsString: string; preview: string }>>([]);
   const [isUploadingReferences, setIsUploadingReferences] = useState(false);
+  const [hasMoreReferences, setHasMoreReferences] = useState(true);
+  const [isLoadingMoreRefs, setIsLoadingMoreRefs] = useState(false);
 
   async function loadDbReferences() {
     setGalleryLoading(true);
     try {
-      const response = await fetch("/api/hero-generator/references");
+      const limit = 15;
+      const response = await fetch(`/api/hero-generator/references?limit=${limit}&offset=0`);
       if (response.ok) {
         const data = await response.json();
-        setDbReferences(data.references || []);
+        const initialRefs = data.references || [];
+        setDbReferences(initialRefs);
+        if (initialRefs.length < limit) {
+          setHasMoreReferences(false);
+        } else {
+          setHasMoreReferences(true);
+        }
       } else {
         setGalleryNotice("Failed to query visual references database.");
       }
@@ -149,6 +158,39 @@ export default function PlaygroundPage() {
       setGalleryNotice("Error loading gallery references database.");
     } finally {
       setGalleryLoading(false);
+    }
+  }
+
+  const loadMoreReferences = useCallback(async (currentOffset: number) => {
+    if (isLoadingMoreRefs || !hasMoreReferences) return;
+    setIsLoadingMoreRefs(true);
+    try {
+      const limit = 15;
+      const res = await fetch(`/api/hero-generator/references?limit=${limit}&offset=${currentOffset}`);
+      if (res.ok) {
+        const data = await res.json();
+        const newRefs = data.references || [];
+        if (newRefs.length < limit) {
+          setHasMoreReferences(false);
+        }
+        setDbReferences(prev => {
+          const existingIds = new Set(prev.map(r => r.id));
+          const filtered = newRefs.filter((r: { id: string }) => !existingIds.has(r.id));
+          return [...prev, ...filtered];
+        });
+      }
+    } catch (err) {
+      console.error("Failed to load more references", err);
+    } finally {
+      setIsLoadingMoreRefs(false);
+    }
+  }, [isLoadingMoreRefs, hasMoreReferences]);
+
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const target = e.currentTarget;
+    const reachedBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 80;
+    if (reachedBottom && !isLoadingMoreRefs && hasMoreReferences) {
+      void loadMoreReferences(dbReferences.length);
     }
   }
 
@@ -669,7 +711,12 @@ export default function PlaygroundPage() {
                       No visual reference templates found in database. Drag and drop files above to populate inspiration gallery!
                     </div>
                   ) : (
-                    <div className="columns-2 sm:columns-3 lg:columns-4 gap-4 overflow-y-auto max-h-[500px] pr-2 [column-fill:_balance]">
+                    <div 
+                      onScroll={handleScroll}
+                      style={{ height: '500px', maxHeight: '500px' }}
+                      className="overflow-y-auto pr-2 canvas-scrollbar block w-full relative"
+                    >
+                      <div className="columns-2 sm:columns-3 lg:columns-4 gap-4">
                       {dbReferences.map(ref => {
                         const isChecked = selectedRefsForDeletion.includes(ref.id);
                         return (
@@ -706,6 +753,14 @@ export default function PlaygroundPage() {
 
                         );
                       })}
+                      </div>
+                      
+                      {isLoadingMoreRefs && (
+                        <div className="flex flex-col items-center justify-center py-4 text-white/45 border-t border-white/5 w-full">
+                          <div className="h-5 w-5 animate-spin rounded-full border-2 border-[#a3b840]/25 border-t-[#a3b840]"></div>
+                          <p className="mt-2 text-[10px] text-white/35 font-mono">Loading more references...</p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

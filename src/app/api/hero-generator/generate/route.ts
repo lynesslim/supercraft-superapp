@@ -5,6 +5,8 @@ import { rateLimitByRequest } from "@/utils/rate-limit";
 import { logServerError } from "@/utils/server-log";
 import { createAdminClient } from "@/utils/supabase/server";
 
+export const maxDuration = 300;
+
 type GenerateRequest = {
   projectId: string;
   referenceIds: string[];

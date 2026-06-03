@@ -43,6 +43,7 @@ export default function HeroGeneratorClient() {
   const [references, setReferences] = useState<Reference[]>([]);
   const [hasMoreReferences, setHasMoreReferences] = useState(true);
   const [isLoadingMoreRefs, setIsLoadingMoreRefs] = useState(false);
+  const [randomSeed] = useState(() => Math.random());
   
   // Selection states
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
@@ -109,7 +110,7 @@ export default function HeroGeneratorClient() {
 
         // Load visual reference library from database
         const limit = 15;
-        const refRes = await fetch(`/api/hero-generator/references?limit=${limit}&offset=0`);
+        const refRes = await fetch(`/api/hero-generator/references?limit=${limit}&offset=0&seed=${randomSeed}`);
         if (refRes.ok) {
           const refData = await refRes.json();
           const initialRefs = refData.references || [];
@@ -133,7 +134,7 @@ export default function HeroGeneratorClient() {
     setIsLoadingMoreRefs(true);
     try {
       const limit = 15;
-      const res = await fetch(`/api/hero-generator/references?limit=${limit}&offset=${currentOffset}`);
+      const res = await fetch(`/api/hero-generator/references?limit=${limit}&offset=${currentOffset}&seed=${randomSeed}`);
       if (res.ok) {
         const data = await res.json();
         const newRefs = data.references || [];
@@ -151,7 +152,7 @@ export default function HeroGeneratorClient() {
     } finally {
       setIsLoadingMoreRefs(false);
     }
-  }, [isLoadingMoreRefs, hasMoreReferences]);
+  }, [isLoadingMoreRefs, hasMoreReferences, randomSeed]);
 
   function handleScroll(e: React.UIEvent<HTMLDivElement>) {
     const target = e.currentTarget;
@@ -577,8 +578,10 @@ export default function HeroGeneratorClient() {
                 {/* References Cards Grid */}
                 <div 
                   onScroll={handleScroll}
-                  className="mt-5 columns-2 sm:columns-3 gap-4 [column-fill:_balance] max-h-[600px] overflow-y-auto pr-2 canvas-scrollbar"
+                  style={{ height: '600px', maxHeight: '600px' }}
+                  className="mt-5 overflow-y-auto pr-2 canvas-scrollbar block w-full relative"
                 >
+                  <div className="columns-2 sm:columns-3 gap-4">
                   {references.map(ref => {
                     const active = selectedRefs.includes(ref.id);
                     return (
@@ -607,14 +610,15 @@ export default function HeroGeneratorClient() {
                       </button>
                     );
                   })}
-                </div>
-
-                {isLoadingMoreRefs && (
-                  <div className="mt-4 flex flex-col items-center justify-center py-4 text-white/45 border-t border-white/5">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-[#a3b840]/25 border-t-[#a3b840]"></div>
-                    <p className="mt-2 text-[10px] text-white/35 font-mono">Loading next blueprints...</p>
                   </div>
-                )}
+                  
+                  {isLoadingMoreRefs && (
+                    <div className="flex flex-col items-center justify-center py-4 text-white/45 border-t border-white/5 w-full">
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-[#a3b840]/25 border-t-[#a3b840]"></div>
+                      <p className="mt-2 text-[10px] text-white/35 font-mono">Loading next blueprints...</p>
+                    </div>
+                  )}
+                </div>
               </section>
             )}
 

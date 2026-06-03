@@ -7,6 +7,7 @@ import { logServerError } from "@/utils/server-log";
 import { createAdminClient } from "@/utils/supabase/server";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 const PLAYGROUND_IMAGES_BUCKET = "playground-images";
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
