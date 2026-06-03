@@ -175,7 +175,7 @@ export async function POST(request: Request) {
         const arrayBuffer = await resImage.arrayBuffer();
         const layoutBlob = new Blob([arrayBuffer], { type: resImage.headers.get("content-type") || "image/png" });
         
-        formDataBody.append("image[]", layoutBlob, "reference-layout.png");
+        formDataBody.append("image", layoutBlob, "reference-layout.png");
       }
 
       if (logoUrl) {
@@ -187,7 +187,7 @@ export async function POST(request: Request) {
         const arrayBuffer = await resLogo.arrayBuffer();
         const logoBlob = new Blob([arrayBuffer], { type: resLogo.headers.get("content-type") || "image/png" });
         
-        formDataBody.append("image[]", logoBlob, "logo.png");
+        formDataBody.append("image", logoBlob, "logo.png");
       }
 
       const openaiApiKey = process.env.OPENAI_API_KEY;

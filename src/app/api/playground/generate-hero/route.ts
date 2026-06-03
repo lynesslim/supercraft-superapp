@@ -196,7 +196,7 @@ export async function POST(request: Request) {
       const arrayBuffer = await res.arrayBuffer();
       const layoutBlob = new Blob([arrayBuffer], { type: res.headers.get("content-type") || "image/png" });
       
-      formDataBody.append("image[]", layoutBlob, "reference-layout.png");
+      formDataBody.append("image", layoutBlob, "reference-layout.png");
     }
 
     if (logoUrl) {
@@ -208,7 +208,7 @@ export async function POST(request: Request) {
       const arrayBuffer = await res.arrayBuffer();
       const logoBlob = new Blob([arrayBuffer], { type: res.headers.get("content-type") || "image/png" });
       
-      formDataBody.append("image[]", logoBlob, "logo.png");
+      formDataBody.append("image", logoBlob, "logo.png");
     }
 
     // Generate Mockup via OpenAI direct HTTP fetch to support custom proxy limitations
