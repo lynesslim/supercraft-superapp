@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
-import { requireEnv } from "@/utils/env";
 import { sanitizeDocumentFileName } from "@/utils/project-documents";
 import { rateLimitByRequest } from "@/utils/rate-limit";
 import { logServerError } from "@/utils/server-log";
@@ -35,26 +34,6 @@ async function ensurePlaygroundImagesBucket(supabase: any) {
   }
 }
 
-async function imageUrlToBase64DataUrl(url: string): Promise<string> {
-  if (url.startsWith("data:")) {
-    return url;
-  }
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image from URL: ${url}`);
-    }
-    const contentType = response.headers.get("content-type") || "image/png";
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    return `data:${contentType};base64,${base64}`;
-  } catch (err) {
-    console.error(`[ERROR] Failed to convert image URL to base64: ${url}`, err);
-    return url;
-  }
-}
-
-
 export async function POST(request: Request) {
   console.log("[DEBUG] playground generate-hero POST called");
   const authError = await requireApiRole(["superadmin"]);
@@ -63,8 +42,6 @@ export async function POST(request: Request) {
 
   const limited = rateLimitByRequest(request, "admin:generate-hero", { limit: 15, windowMs: 60_000 });
   if (limited) return limited;
-
-  requireEnv("openai");
 
   let formData: FormData;
   try {
@@ -177,86 +154,34 @@ export async function POST(request: Request) {
 
     console.log("[DEBUG] playground generate-hero final prompt preview:", finalPrompt.slice(0, 150));
 
-    // Construct FormData body for the multipart/form-data images/edits API call
-    const formDataBody = new FormData();
-    formDataBody.append("model", "gpt-image-2");
-    formDataBody.append("prompt", finalPrompt);
-    
     const finalSize = "1152x2048";
-    formDataBody.append("size", finalSize);
 
+    console.log("[DEBUG] Invoking Supabase Edge Function generate-hero");
 
-
-    if (imageUrl) {
-      console.log("[DEBUG] Fetching reference layout image for edits attachment:", imageUrl);
-      const res = await fetch(imageUrl);
-      if (!res.ok) {
-        throw new Error(`Failed to fetch reference layout image: ${res.statusText}`);
-      }
-      const arrayBuffer = await res.arrayBuffer();
-      const layoutBlob = new Blob([arrayBuffer], { type: res.headers.get("content-type") || "image/png" });
-      
-      formDataBody.append("image", layoutBlob, "reference-layout.png");
-    }
-
-    if (logoUrl) {
-      console.log("[DEBUG] Fetching company logo image for edits attachment:", logoUrl);
-      const res = await fetch(logoUrl);
-      if (!res.ok) {
-        throw new Error(`Failed to fetch logo image: ${res.statusText}`);
-      }
-      const arrayBuffer = await res.arrayBuffer();
-      const logoBlob = new Blob([arrayBuffer], { type: res.headers.get("content-type") || "image/png" });
-      
-      formDataBody.append("image", logoBlob, "logo.png");
-    }
-
-    // Generate Mockup via OpenAI direct HTTP fetch to support custom proxy limitations
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-    const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-
-    console.log("[DEBUG] Dispatching POST fetch to v1/images/edits");
-    const response = await fetch(`${openaiBaseUrl}/images/edits`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${openaiApiKey}`,
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
+    const { data: edgeResult, error: edgeError } = await supabase.functions.invoke("generate-hero", {
+      body: {
+        prompt: finalPrompt,
+        imageUrl: imageUrl || undefined,
+        logoUrl: logoUrl || undefined,
+        size: finalSize,
       },
-      body: formDataBody,
     });
 
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      const apiError = errorBody.error?.message ?? `API error: ${response.status}`;
-      throw new Error(apiError);
+    if (edgeError) {
+      throw new Error(edgeError.message);
     }
 
-    const payload = await response.json() as { data?: Array<{ url?: string; b64_json?: string }> };
-    let generatedUrl = "";
-    if (payload.data?.[0]?.url) {
-      generatedUrl = payload.data[0].url;
-    } else if (payload.data?.[0]?.b64_json) {
-      const b64 = payload.data[0].b64_json;
-      generatedUrl = b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`;
+    if (!edgeResult?.url) {
+      throw new Error("Edge function did not return an image URL.");
     }
-
-    if (!generatedUrl) {
-      throw new Error("Proxy did not return any image data in the edits payload.");
-    }
-
-    const [widthStr, heightStr] = finalSize.split("x");
-    const width = parseInt(widthStr, 10);
-    const height = parseInt(heightStr, 10);
 
     return NextResponse.json({
       success: true,
-      imageUrl: generatedUrl,
+      imageUrl: edgeResult.url,
       finalPrompt,
-      width,
-      height,
+      width: edgeResult.width,
+      height: edgeResult.height,
     });
-
 
   } catch (error) {
     logServerError("playground.generate-hero.failed", error);

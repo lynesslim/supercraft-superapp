@@ -220,7 +220,7 @@ export default function HeroGeneratorClient() {
 
   function handleGenerate() {
     setErrorNotice("");
-    setNotice("Crafting premium layout prompts and launching gpt-image-2 generators sequentially...");
+    setNotice("Crafting premium layout prompts and launching gpt-image-2 generators in parallel...");
     setMockupOptions([]);
     setShowResultsView(true);
 
@@ -238,10 +238,12 @@ export default function HeroGeneratorClient() {
         itemsToProcess = itemsToProcess.slice(0, 5);
         const generatedOptions: any[] = [];
         
-        for (let i = 0; i < itemsToProcess.length; i++) {
-          setNotice(`Generating mockup ${i + 1} of ${itemsToProcess.length}... this may take a few seconds.`);
-          const item = itemsToProcess[i];
-          
+        const generationPromises = itemsToProcess.map(async (item, i) => {
+          // Stagger each parallel request by 1.5 seconds to prevent proxy API concurrency limits from crashing the 5th request
+          if (i > 0) {
+            await new Promise(resolve => setTimeout(resolve, i * 1500));
+          }
+
           const response = await fetch("/api/hero-generator/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -263,10 +265,11 @@ export default function HeroGeneratorClient() {
           }
           
           if (data.options && data.options.length > 0) {
-             generatedOptions.push(...data.options);
-             setMockupOptions([...generatedOptions]);
+             setMockupOptions(prev => [...prev, ...data.options]);
           }
-        }
+        });
+
+        await Promise.all(generationPromises);
 
         setNotice("Successfully generated options! Pick your favorites to save.");
       } catch (err) {

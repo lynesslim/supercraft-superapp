@@ -1,0 +1,3 @@
+[functions]
+[functions.generate-hero]
+verify_jwt = false

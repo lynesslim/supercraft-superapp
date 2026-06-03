@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { requireApiRole } from "@/utils/auth";
-import { requireEnv } from "@/utils/env";
 import { rateLimitByRequest } from "@/utils/rate-limit";
 import { logServerError } from "@/utils/server-log";
 import { createAdminClient } from "@/utils/supabase/server";
@@ -54,8 +53,6 @@ export async function POST(request: Request) {
   const limited = rateLimitByRequest(request, "hero:generate", { limit: 15, windowMs: 60_000 });
   if (limited) return limited;
   
-  requireEnv("openai");
-
   let body: GenerateRequest;
   try {
     body = await request.json();
@@ -156,84 +153,33 @@ export async function POST(request: Request) {
         promptVariation += ` Fully integrate the company logo from the attached company logo image.`;
       }
 
-      // Construct FormData body for the multipart/form-data images/edits API call
-      const formDataBody = new FormData();
-      formDataBody.append("model", "gpt-image-2");
-      formDataBody.append("prompt", promptVariation);
-      
       const finalSize = "1152x2048";
-      formDataBody.append("size", finalSize);
 
+      console.log(`[DEBUG] Invoking Supabase Edge Function generate-hero, variation ${idx}`);
 
-
-      if (imageUrlText) {
-        console.log(`[DEBUG] Fetching parallel ref image ${idx} for edits attachment:`, imageUrlText);
-        const resImage = await fetch(imageUrlText);
-        if (!resImage.ok) {
-          throw new Error(`Failed to fetch parallel reference layout image: ${resImage.statusText}`);
-        }
-        const arrayBuffer = await resImage.arrayBuffer();
-        const layoutBlob = new Blob([arrayBuffer], { type: resImage.headers.get("content-type") || "image/png" });
-        
-        formDataBody.append("image", layoutBlob, "reference-layout.png");
-      }
-
-      if (logoUrl) {
-        console.log(`[DEBUG] Fetching parallel logo image ${idx} for edits attachment:`, logoUrl);
-        const resLogo = await fetch(logoUrl);
-        if (!resLogo.ok) {
-          throw new Error(`Failed to fetch parallel logo image: ${resLogo.statusText}`);
-        }
-        const arrayBuffer = await resLogo.arrayBuffer();
-        const logoBlob = new Blob([arrayBuffer], { type: resLogo.headers.get("content-type") || "image/png" });
-        
-        formDataBody.append("image", logoBlob, "logo.png");
-      }
-
-      const openaiApiKey = process.env.OPENAI_API_KEY;
-      const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
-
-      console.log(`[DEBUG] Dispatching parallel POST fetch ${idx} to v1/images/edits`);
-      const res = await fetch(`${openaiBaseUrl}/images/edits`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${openaiApiKey}`,
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "application/json",
+      const { data: edgeResult, error: edgeError } = await supabase.functions.invoke("generate-hero", {
+        body: {
+          prompt: promptVariation,
+          imageUrl: imageUrlText || undefined,
+          logoUrl: logoUrl || undefined,
+          size: finalSize,
         },
-        body: formDataBody,
       });
 
-      if (!res.ok) {
-        const errorBody = await res.json().catch(() => ({}));
-        const apiError = errorBody.error?.message ?? `API error: ${res.status}`;
-        throw new Error(apiError);
+      if (edgeError) {
+        throw new Error(edgeError.message);
       }
 
-      const payload = await res.json() as { data?: Array<{ url?: string; b64_json?: string }> };
-      let finalImageUrl = "";
-      if (payload.data?.[0]?.url) {
-        finalImageUrl = payload.data[0].url;
-      } else if (payload.data?.[0]?.b64_json) {
-        const b64 = payload.data[0].b64_json;
-        finalImageUrl = b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`;
+      if (!edgeResult?.url) {
+        throw new Error("Edge function did not return an image URL.");
       }
-
-      if (!finalImageUrl) {
-        throw new Error("Proxy did not return any image data in the edits payload.");
-      }
-
-      const [widthStr, heightStr] = finalSize.split("x");
-      const width = parseInt(widthStr, 10);
-      const height = parseInt(heightStr, 10);
 
       return {
-        url: finalImageUrl,
+        url: edgeResult.url,
         prompt: promptVariation,
-        width,
-        height
+        width: edgeResult.width,
+        height: edgeResult.height,
       };
-
     });
 
     const results = await Promise.allSettled(generationPromises);
