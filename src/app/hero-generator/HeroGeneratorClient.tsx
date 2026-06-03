@@ -244,7 +244,7 @@ export default function HeroGeneratorClient() {
 
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.error || data.details || "Failed to generate mockups.");
+          throw new Error(data.details ? `${data.error} Details: ${data.details}` : data.error || "Failed to generate mockups.");
         }
 
         setMockupOptions(data.options || []);
