@@ -68,6 +68,7 @@ export default function HeroGeneratorClient() {
   const [customReferences, setCustomReferences] = useState<Array<{ url: string; id: string; title: string }>>([]);
   const [selectedCustomRefs, setSelectedCustomRefs] = useState<string[]>([]);
   const [isUploadingCustomRef, setIsUploadingCustomRef] = useState(false);
+  const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
   // Status states
   const [isGenerating, startGenerating] = useTransition();
@@ -199,10 +200,35 @@ export default function HeroGeneratorClient() {
       setNotice(`Uploaded "${file.name}" as custom reference.`);
       setTimeout(() => setNotice(""), 3000);
     } catch (err) {
+      console.error("Upload error", err);
       setErrorNotice(err instanceof Error ? err.message : String(err));
     } finally {
       setIsUploadingCustomRef(false);
-      e.target.value = "";
+    }
+  }
+
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setIsUploadingLogo(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/hero-generator/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed.");
+      setCustomLogoUrl(data.url);
+      setNotice(`Uploaded logo successfully.`);
+      setTimeout(() => setNotice(""), 3000);
+    } catch (err) {
+      console.error(err);
+      setErrorNotice("Failed to upload logo.");
+    } finally {
+      setIsUploadingLogo(false);
     }
   }
 
@@ -470,15 +496,21 @@ export default function HeroGeneratorClient() {
             {/* Step 4: Company Logo */}
             <div className="flex flex-col gap-2">
               <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
-                4. Company Logo (Optional URL)
+                4. Company Logo (Upload or URL)
               </label>
-              <input 
-                type="text"
-                value={customLogoUrl}
-                onChange={(e) => setCustomLogoUrl(e.target.value)}
-                placeholder="https://example.com/logo.png"
-                className="w-full rounded-lg border border-white/10 bg-[#111310] px-4 py-3 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60"
-              />
+              <div className="flex gap-2">
+                <input 
+                  type="text"
+                  value={customLogoUrl}
+                  onChange={(e) => setCustomLogoUrl(e.target.value)}
+                  placeholder="https://example.com/logo.png"
+                  className="flex-1 rounded-lg border border-white/10 bg-[#111310] px-4 py-3 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60"
+                />
+                <label className={`flex cursor-pointer items-center justify-center rounded-lg px-4 text-xs font-bold transition border ${isUploadingLogo ? "bg-white/10 border-white/20 text-white/40" : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"}`}>
+                  <input type="file" accept="image/*" className="hidden" disabled={isUploadingLogo} onChange={handleLogoUpload} />
+                  {isUploadingLogo ? "..." : "Upload"}
+                </label>
+              </div>
             </div>
 
             {/* Step 5: Additional Instruction */}
