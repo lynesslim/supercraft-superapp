@@ -30,6 +30,9 @@ serve(async (req: Request) => {
     formData.append("prompt", prompt)
     formData.append("size", size)
 
+    const hasMultipleImages = !!(imageUrl && logoUrl)
+    const imageKey = hasMultipleImages ? "image[]" : "image"
+
     if (imageUrl) {
       console.log(`[generate-hero] Fetching reference image: ${imageUrl}`)
       const imageRes = await fetch(imageUrl)
@@ -39,16 +42,19 @@ serve(async (req: Request) => {
       }
       const imageBlob = await imageRes.blob()
       console.log(`[generate-hero] Reference image fetched. Size: ${imageBlob.size} bytes`)
-      formData.append("image", imageBlob, "reference-layout.png")
+      formData.append(imageKey, imageBlob, "reference-layout.png")
     }
 
     if (logoUrl) {
+      console.log(`[generate-hero] Fetching logo image: ${logoUrl}`)
       const logoRes = await fetch(logoUrl)
       if (!logoRes.ok) {
+        console.error(`[generate-hero] Failed to fetch logo image. Status: ${logoRes.status}`)
         throw new Error(`Failed to fetch logo image: ${logoRes.statusText}`)
       }
       const logoBlob = await logoRes.blob()
-      formData.append("image", logoBlob, "logo.png")
+      console.log(`[generate-hero] Logo image fetched. Size: ${logoBlob.size} bytes`)
+      formData.append(imageKey, logoBlob, "logo.png")
     }
 
     const openaiBaseUrl = Deno.env.get("OPENAI_BASE_URL") || "https://api.openai.com/v1"
