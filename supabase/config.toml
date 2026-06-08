@@ -1,3 +1,9 @@
 [functions]
 [functions.generate-hero]
 verify_jwt = false
+
+[functions.edit-hero]
+verify_jwt = false
+
+[functions.extract-assets]
+verify_jwt = false

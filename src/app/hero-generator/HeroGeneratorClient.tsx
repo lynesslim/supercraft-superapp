@@ -284,7 +284,15 @@ export default function HeroGeneratorClient() {
             })
           });
 
-          const data = await response.json();
+          const textResponse = await response.text();
+          let data;
+          try {
+            data = JSON.parse(textResponse);
+          } catch (e) {
+            console.error(`Generation ${i+1} failed with non-JSON response:`, textResponse.substring(0, 500));
+            throw new Error(`Server returned an invalid response (not JSON). Response: ${textResponse.substring(0, 100)}...`);
+          }
+          
           if (!response.ok) {
             console.error(`Generation ${i+1} failed:`, data);
             throw new Error(data.details ? `${data.error} Details: ${data.details}` : data.error || `Failed to generate mockup ${i+1}.`);
