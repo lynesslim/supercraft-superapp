@@ -1,52 +1,43 @@
-# Migrate AI Edit and Asset Extraction to Supabase Edge Functions
+# Asynchronous Polling for Hero Generator
 
-Currently, both the AI Edit (`src/app/api/hero-generator/edit/route.ts`) and Asset Extraction (`src/app/api/hero-generator/extract-assets/route.ts`) features handle the heavy image proxying directly in the Next.js API routes. 
+The current architecture is synchronous: the client waits for the Next.js API route, which waits for the Supabase Edge Function, which waits for OpenAI. This causes timeouts with strict proxy servers like Hostinger's NGINX because the connection sits idle for over 60 seconds.
 
-To maintain consistency and offload this to Supabase, we will create two new Edge Functions (`edit-hero` and `extract-assets`) and update the Next.js routes to act as orchestrators.
+To solve this, we will move to an **Asynchronous Polling Architecture**.
 
 ## Proposed Changes
 
-### Supabase Edge Functions
+### 1. Database Schema
+We will create a new table to track the state of generation jobs.
 
-#### [NEW] [edit-hero/index.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/supabase/functions/edit-hero/index.ts)
-Create a new Deno-based edge function for `edit-hero`.
-- Receives JSON payload: `imageUrl`, `instruction`.
-- Constructs the prompt: `Edit the attached hero mockup image. ${instruction}. Preserve the overall layout and branding. Return the revised mockup.`
-- Fetches the source `imageUrl` to get the image Blob.
-- Constructs `FormData` with `model: "gpt-image-2"`, `size: "1152x2048"`, `prompt`, and the image.
-- Sends the `POST` request to `${OPENAI_BASE_URL}/images/edits` using `OPENAI_API_KEY`.
-- Returns the edited image URL to the caller.
+#### [NEW] `supabase/migrations/20260608_hero_mockup_jobs.sql`
+- Create a `mockup_jobs` table with:
+  - `id` (UUID)
+  - `project_id` (UUID)
+  - `status` (pending, completed, failed)
+  - `result` (JSONB) - to store the generated image options
+  - `error` (TEXT) - to store any failure messages
+  - `created_at` (TIMESTAMP)
 
-#### [NEW] [extract-assets/index.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/supabase/functions/extract-assets/index.ts)
-Create a new Deno-based edge function for `extract-assets`.
-- Receives JSON payload: `mockupImageUrl`, `bgPrompt`, `iconPrompt`.
-- Fetches the source `mockupImageUrl` **once** to get the image Blob (optimizing bandwidth).
-- Dispatches two **parallel** `POST` requests to `${OPENAI_BASE_URL}/images/edits` using `FormData`:
-  - Background task: `size: "2048x1152"`, `prompt: bgPrompt`
-  - Iconography task: `size: "1152x2048"`, `prompt: iconPrompt`
-- Awaits both results using `Promise.allSettled`.
-- Returns the successfully extracted assets in a combined payload.
+### 2. Next.js API Routes
 
-### API Routes
+#### [MODIFY] `src/app/api/hero-generator/generate/route.ts`
+- **Synchronous Setup**: The route will validate the request and immediately insert a new row into `mockup_jobs` with `status = 'pending'`.
+- **Background Execution**: The route will kick off the OpenAI requests in the background (as an un-awaited promise).
+- **Return Early**: The route will immediately return `{ success: true, jobId: job.id }` to the client.
+- **Background Completion**: When the background promise finishes, it will update the `mockup_jobs` record with either `status = 'completed'` (storing the images in `result`) or `status = 'failed'` (storing the error).
 
-#### [MODIFY] [edit/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/edit/route.ts)
-Update the Next.js API route to act as an orchestrator.
-- Keep the existing authentication (`requireApiRole`) and rate limiting (`rateLimitByRequest`).
-- Remove direct FormData construction and proxy fetch.
-- Invoke the edge function: `await supabase.functions.invoke("edit-hero", { body: { imageUrl, instruction } })`.
-- Return the generated URL.
+#### [NEW] `src/app/api/hero-generator/jobs/[id]/route.ts`
+- Create a new GET endpoint that accepts a `jobId`.
+- Fetches the row from `mockup_jobs` and returns it so the client can check the status.
 
-#### [MODIFY] [extract-assets/route.ts](file:///Users/lynesslim/Library/CloudStorage/GoogleDrive-lynesslim@gmail.com/.shortcut-targets-by-id/1tdRwUUrLZ8ISnTgPBALicsop9_kB_lNQ/Supercraft%20Drive/03_RESOURCES/Custom%20Tool/Supercraft%20Superapp/src/app/api/hero-generator/extract-assets/route.ts)
-Update the Next.js API route for asset extraction.
-- Keep auth, rate limiting, and the DB queries to fetch system prompts (`bgPromptBase`, `iconPromptBase`).
-- Remove the local `dispatchExtraction` logic and local image fetching.
-- Invoke the edge function: `await supabase.functions.invoke("extract-assets", { body: { mockupImageUrl, bgPrompt: bgPromptBase, iconPrompt: iconPromptBase } })`.
-- Return the combined results array exactly as the frontend expects it.
+### 3. Frontend Client
 
-## Verification Plan
+#### [MODIFY] `src/app/hero-generator/HeroGeneratorClient.tsx`
+- Update the `handleGenerate` function to expect a `jobId` instead of an immediate array of images.
+- Start a polling mechanism (`setInterval`) that pings `/api/hero-generator/jobs/[jobId]` every 5-10 seconds.
+- Update the UI to show a "Generating..." state while the job status is `pending`.
+- When the job returns `completed`, display the images and stop polling.
+- When the job returns `failed`, display the error and stop polling.
 
-### Manual Verification
-1. Serve the new Supabase edge functions locally.
-2. Go to the Hero Generator in the app and test the "AI Edit" feature.
-3. Use the "Extract Assets" feature to generate background and iconography sheets from a mockup.
-4. Verify both routes proxy successfully through their respective edge functions.
+## Context
+- **Hosting Environment**: The app is currently deployed on Hostinger, which uses an NGINX proxy that drops idle connections after 60 seconds. This is why a synchronous approach times out. Since Hostinger runs a persistent Node.js process, background promises initiated in Next.js API routes will continue executing perfectly fine after the HTTP response has been sent back to the client.

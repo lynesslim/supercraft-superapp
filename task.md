@@ -1,15 +1,15 @@
-- [ ] Create `supabase/functions/edit-hero/index.ts`
-  - [ ] Parse `imageUrl` and `instruction`.
-  - [ ] Fetch the image and convert to Blob.
-  - [ ] Append to FormData and fetch from OpenAI proxy.
-  - [ ] Return the edited image URL.
-- [ ] Create `supabase/functions/extract-assets/index.ts`
-  - [ ] Parse `mockupImageUrl`, `bgPrompt`, `iconPrompt`.
-  - [ ] Fetch the source image once and convert to Blob.
-  - [ ] Run two parallel requests to OpenAI proxy using `Promise.allSettled` (Background `2048x1152`, Iconography `1152x2048`).
-  - [ ] Return the combined results.
-- [ ] Update `src/app/api/hero-generator/edit/route.ts`
-  - [ ] Replace OpenAI fetch logic with `supabase.functions.invoke("edit-hero", ...)`.
-- [ ] Update `src/app/api/hero-generator/extract-assets/route.ts`
-  - [ ] Keep DB prompt fetching, replace local `dispatchExtraction` with `supabase.functions.invoke("extract-assets", ...)`.
-- [ ] Test both features end-to-end.
+- [ ] Create Database Migration `supabase/migrations/20260608_hero_mockup_jobs.sql`
+  - [ ] Create `mockup_jobs` table.
+  - [ ] Add columns: `id`, `project_id`, `status`, `result`, `error`, `created_at`.
+- [ ] Update `src/app/api/hero-generator/generate/route.ts`
+  - [ ] Insert a new `mockup_jobs` record and retrieve `job.id`.
+  - [ ] Execute `Promise.allSettled(generationPromises)` in the background without `await`.
+  - [ ] Update `mockup_jobs` table with `completed` or `failed` status when the background promise resolves.
+  - [ ] Return `{ success: true, jobId }` synchronously to the client.
+- [ ] Create `src/app/api/hero-generator/jobs/[id]/route.ts`
+  - [ ] Implement GET endpoint to retrieve job status and results from `mockup_jobs` by `jobId`.
+- [ ] Update `src/app/hero-generator/HeroGeneratorClient.tsx`
+  - [ ] Modify `handleGenerate` to parse `jobId` from the initial response.
+  - [ ] Set up a polling interval (`setInterval`) to ping `/api/hero-generator/jobs/[jobId]`.
+  - [ ] Handle UI states for `pending` (show loading spinner), `completed` (show images), and `failed` (show error).
+- [ ] Test the full asynchronous flow end-to-end to ensure it handles timeouts gracefully.

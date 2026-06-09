@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { 
   Sparkles, Check, Eye, Download, Info, Search, ChevronDown, ArrowLeft
 } from "lucide-react";
@@ -71,11 +71,14 @@ export default function HeroGeneratorClient() {
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
   // Status states
-  const [isGenerating, startGenerating] = useTransition();
+  const [isPolling, setIsPolling] = useState(false);
   const [isSavingIndex, setIsSavingIndex] = useState<number | null>(null);
   const [isEditingMockup, setIsEditingMockup] = useState(false);
   const [notice, setNotice] = useState<string>("");
   const [errorNotice, setErrorNotice] = useState<string>("");
+
+  const jobIdsRef = useRef<Set<string>>(new Set());
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeProject = projects.find(p => p.id === selectedProjectId);
 
@@ -244,73 +247,128 @@ export default function HeroGeneratorClient() {
     });
   }
 
-  function handleGenerate() {
+  useEffect(() => {
+    if (!isPolling) return;
+
+    pollingRef.current = setInterval(async () => {
+      const ids = Array.from(jobIdsRef.current);
+      if (ids.length === 0) {
+        if (pollingRef.current) clearInterval(pollingRef.current);
+        setIsPolling(false);
+        return;
+      }
+
+      let allDone = true;
+
+      for (const jobId of ids) {
+        try {
+          const res = await fetch(`/api/hero-generator/jobs/${jobId}`);
+          if (!res.ok) {
+            jobIdsRef.current.delete(jobId);
+            console.error(`Job ${jobId} not found.`);
+            continue;
+          }
+          const data = await res.json();
+          const job = data.job;
+
+          if (job.status === "completed") {
+            jobIdsRef.current.delete(jobId);
+            if (job.result?.options) {
+              setMockupOptions(prev => {
+                const existingUrls = new Set(prev.map(o => o.url));
+                const newOptions = job.result.options.filter((o: { url: string }) => !existingUrls.has(o.url));
+                return newOptions.length > 0 ? [...prev, ...newOptions] : prev;
+              });
+            }
+          } else if (job.status === "failed") {
+            jobIdsRef.current.delete(jobId);
+            setErrorNotice(job.error || "Generation failed.");
+          } else {
+            allDone = false;
+          }
+        } catch (err) {
+          console.error(`Failed to poll job ${jobId}:`, err);
+          allDone = false;
+        }
+      }
+
+      if (allDone || jobIdsRef.current.size === 0) {
+        if (pollingRef.current) clearInterval(pollingRef.current);
+        setIsPolling(false);
+        setNotice("Successfully generated options! Pick your favorites to save.");
+      }
+    }, 5000);
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [isPolling]);
+
+  async function handleGenerate() {
     setErrorNotice("");
     setNotice("Crafting premium layout prompts and launching gpt-image-2 generators in parallel...");
     setMockupOptions([]);
     setShowResultsView(true);
 
-    startGenerating(async () => {
-      try {
-        let itemsToProcess: { type: "db" | "custom", idOrUrl: string }[] = [];
-        
-        selectedRefs.forEach(id => itemsToProcess.push({ type: "db", idOrUrl: id }));
-        selectedCustomRefs.forEach(url => itemsToProcess.push({ type: "custom", idOrUrl: url }));
-        
-        if (itemsToProcess.length === 0) {
-           references.slice(0, 5).forEach(r => itemsToProcess.push({ type: "db", idOrUrl: r.id }));
-        }
-        
-        itemsToProcess = itemsToProcess.slice(0, 5);
-        const generatedOptions: any[] = [];
-        
-        const generationPromises = itemsToProcess.map(async (item, i) => {
-          // Stagger each parallel request by 1.5 seconds to prevent proxy API concurrency limits from crashing the 5th request
-          if (i > 0) {
-            await new Promise(resolve => setTimeout(resolve, i * 1500));
-          }
+    try {
+      let itemsToProcess: { type: "db" | "custom", idOrUrl: string }[] = [];
 
-          const response = await fetch("/api/hero-generator/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              projectId: selectedProjectId,
-              referenceIds: item.type === "db" ? [item.idOrUrl] : [],
-              theme: themePreference,
-              accentColor,
-              logoUrl: customLogoUrl || null,
-              additionalInstruction,
-              customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
-            })
-          });
+      selectedRefs.forEach(id => itemsToProcess.push({ type: "db", idOrUrl: id }));
+      selectedCustomRefs.forEach(url => itemsToProcess.push({ type: "custom", idOrUrl: url }));
 
-          const textResponse = await response.text();
-          let data;
-          try {
-            data = JSON.parse(textResponse);
-          } catch (e) {
-            console.error(`Generation ${i+1} failed with non-JSON response:`, textResponse.substring(0, 500));
-            throw new Error(`Server returned an invalid response (not JSON). Response: ${textResponse.substring(0, 100)}...`);
-          }
-          
-          if (!response.ok) {
-            console.error(`Generation ${i+1} failed:`, data);
-            throw new Error(data.details ? `${data.error} Details: ${data.details}` : data.error || `Failed to generate mockup ${i+1}.`);
-          }
-          
-          if (data.options && data.options.length > 0) {
-             setMockupOptions(prev => [...prev, ...data.options]);
-          }
+      if (itemsToProcess.length === 0) {
+         references.slice(0, 5).forEach(r => itemsToProcess.push({ type: "db", idOrUrl: r.id }));
+      }
+
+      itemsToProcess = itemsToProcess.slice(0, 5);
+      const jobIds: string[] = [];
+
+      for (const item of itemsToProcess) {
+        const response = await fetch("/api/hero-generator/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: selectedProjectId,
+            referenceIds: item.type === "db" ? [item.idOrUrl] : [],
+            theme: themePreference,
+            accentColor,
+            logoUrl: customLogoUrl || null,
+            additionalInstruction,
+            customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
+          })
         });
 
-        await Promise.all(generationPromises);
+        const textResponse = await response.text();
+        let data;
+        try {
+          data = JSON.parse(textResponse);
+        } catch (e) {
+          console.error(`Generation failed with non-JSON response:`, textResponse.substring(0, 500));
+          throw new Error(`Server returned an invalid response (not JSON). Response: ${textResponse.substring(0, 100)}...`);
+        }
 
-        setNotice("Successfully generated options! Pick your favorites to save.");
-      } catch (err) {
-        setErrorNotice(err instanceof Error ? err.message : String(err));
-        setNotice("");
+        if (!response.ok) {
+          console.error(`Generation failed:`, data);
+          throw new Error(data.details ? `${data.error} Details: ${data.details}` : data.error || `Failed to generate mockup.`);
+        }
+
+        if (data.jobId) {
+          jobIds.push(data.jobId);
+        }
       }
-    });
+
+      if (jobIds.length === 0) {
+        throw new Error("No generation jobs were created.");
+      }
+
+      jobIdsRef.current = new Set(jobIds);
+      setIsPolling(true);
+      setNotice("Generating mockups in background... Results will appear soon.");
+
+    } catch (err) {
+      setErrorNotice(err instanceof Error ? err.message : String(err));
+      setNotice("");
+    }
   }
 
   async function handleSaveMockup(optionIndex: number) {
@@ -553,11 +611,11 @@ export default function HeroGeneratorClient() {
 
             <button
               onClick={handleGenerate}
-              disabled={isGenerating || !selectedProjectId}
+              disabled={isPolling || !selectedProjectId}
               className="motion-lift mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[#a3b840] py-4 text-sm font-bold text-[#111310] shadow-xl shadow-[#a3b840]/10 hover:bg-[#c8db5a] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Sparkles size={16} />
-              {isGenerating ? "Generating 5 Mockups..." : "Generate 5 Mockups"}
+              {isPolling ? "Generating 5 Mockups..." : "Generate 5 Mockups"}
             </button>
           </aside>
 
@@ -565,7 +623,7 @@ export default function HeroGeneratorClient() {
           <div className="flex flex-col gap-8">
             
             {/* Custom Reference Upload */}
-            {!isGenerating && !showResultsView && (
+            {!isPolling && !showResultsView && (
               <section className="rounded-xl border border-white/8 bg-[#171914] p-5 shadow-xl shadow-black/25">
                 <div className="border-b border-white/5 pb-4">
                   <h2 className="text-lg font-bold text-[#f3f4ec]">
@@ -629,7 +687,7 @@ export default function HeroGeneratorClient() {
             )}
 
             {/* Visual References Gallery (Simplified, database-driven) */}
-            {!isGenerating && !showResultsView && (
+            {!isPolling && !showResultsView && (
               <section className="rounded-xl border border-white/8 bg-[#171914] p-5 shadow-xl shadow-black/25">
                 <div className="border-b border-white/5 pb-4">
                   <h2 className="text-lg font-bold text-[#f3f4ec]">
@@ -700,7 +758,7 @@ export default function HeroGeneratorClient() {
             )}
 
             {/* Generated Mockups Chamber */}
-            {isGenerating && (
+            {isPolling && (
               <div className="rounded-xl border border-white/8 bg-[#171914] p-8 shadow-xl shadow-black/25">
                 <div className="flex flex-col items-center justify-center text-center">
                   <div className="relative h-16 w-16">
@@ -709,9 +767,9 @@ export default function HeroGeneratorClient() {
                       <Sparkles className="text-[#a3b840] animate-pulse" size={24} />
                     </div>
                   </div>
-                  <h3 className="mt-5 text-lg font-bold text-[#f3f4ec]">Assembling Design Mockups</h3>
+                  <h3 className="mt-5 text-lg font-bold text-[#f3f4ec]">Generating Design Mockups</h3>
                   <p className="mt-2 text-xs text-white/40 max-w-sm">
-                    OpenAI gpt-image-2 is busy mapping color themes and styling rules across 5 discrete options. This takes about 10-15 seconds.
+                    gpt-image-2 is generating your mockups in the background. Results will appear as each one completes.
                   </p>
                   
                   {/* Glassmorphic progress shimmers */}
