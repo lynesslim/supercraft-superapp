@@ -13,6 +13,8 @@ export function OPTIONS() {
 
 type CheckLicensePayload = {
   embed_code?: unknown;
+  plugin_name?: unknown;
+  domain?: unknown;
 };
 
 export async function POST(request: NextRequest) {
