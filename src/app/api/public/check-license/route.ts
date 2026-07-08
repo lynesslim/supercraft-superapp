@@ -27,6 +27,8 @@ export async function POST(request: NextRequest) {
   }
 
   const embedCode = body.embed_code;
+  const pluginName = typeof body.plugin_name === "string" ? body.plugin_name.trim() : "supercraft-master-plugin";
+  const domain = typeof body.domain === "string" ? body.domain.trim() : "";
 
   if (typeof embedCode !== "string" || !embedCode.trim()) {
     return NextResponse.json(
@@ -58,8 +60,73 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (!project) {
+    return NextResponse.json(
+      { error: "Invalid license key.", valid: false },
+      { status: 404, headers: CORS_HEADERS },
+    );
+  }
+
+  const { data: existingRegistration, error: registrationError } = await supabase
+    .from("project_plugin_registrations")
+    .select("id, registered_domain")
+    .eq("project_id", project.id)
+    .eq("plugin_name", pluginName)
+    .maybeSingle();
+
+  if (registrationError) {
+    return NextResponse.json(
+      { error: registrationError.message },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
+  if (existingRegistration) {
+    const existingDomain = existingRegistration.registered_domain ? existingRegistration.registered_domain.trim().toLowerCase() : "";
+    const incomingDomain = domain.toLowerCase();
+
+    if (!existingDomain && incomingDomain) {
+      const { error: updateError } = await supabase
+        .from("project_plugin_registrations")
+        .update({ registered_domain: domain })
+        .eq("id", existingRegistration.id);
+
+      if (updateError) {
+        return NextResponse.json(
+          { error: updateError.message },
+          { status: 500, headers: CORS_HEADERS },
+        );
+      }
+    } else if (existingDomain && incomingDomain && existingDomain !== incomingDomain) {
+      return NextResponse.json(
+        { error: `This license is already registered on another domain: ${existingRegistration.registered_domain}`, valid: false },
+        { status: 409, headers: CORS_HEADERS },
+      );
+    }
+
+    return NextResponse.json(
+      { valid: true, registered: true },
+      { status: 200, headers: CORS_HEADERS },
+    );
+  }
+
+  const { error: insertError } = await supabase
+    .from("project_plugin_registrations")
+    .insert({
+      project_id: project.id,
+      plugin_name: pluginName,
+      registered_domain: domain ? domain : null,
+    });
+
+  if (insertError) {
+    return NextResponse.json(
+      { error: insertError.message },
+      { status: 500, headers: CORS_HEADERS },
+    );
+  }
+
   return NextResponse.json(
-    { valid: !!project },
+    { valid: true, registered: true },
     { status: 200, headers: CORS_HEADERS },
   );
 }

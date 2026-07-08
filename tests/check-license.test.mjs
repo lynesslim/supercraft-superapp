@@ -24,5 +24,5 @@ test("check-license API endpoint structure and security validation", async () =>
 
   // Assert validation logic
   assert.match(code, /embed_code/);
-  assert.match(code, /valid: \!\!project/);
+  assert.match(code, /valid: true/);
 });
