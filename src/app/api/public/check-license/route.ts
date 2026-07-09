@@ -84,8 +84,18 @@ export async function POST(request: NextRequest) {
   }
 
   if (existingRegistration) {
-    const existingDomain = existingRegistration.registered_domain ? existingRegistration.registered_domain.trim().toLowerCase() : "";
-    const incomingDomain = domain.toLowerCase();
+    // Normalize domains to bare hostnames for comparison
+    // (handles mismatch between "https://site.com" vs "site.com")
+    const normalizeDomain = (d: string): string => {
+      try {
+        const withProto = d.includes("://") ? d : `https://${d}`;
+        return new URL(withProto).hostname.toLowerCase();
+      } catch {
+        return d.toLowerCase();
+      }
+    };
+    const existingDomain = existingRegistration.registered_domain ? normalizeDomain(existingRegistration.registered_domain.trim()) : "";
+    const incomingDomain = domain ? normalizeDomain(domain) : "";
 
     if (!existingDomain && incomingDomain) {
       const { error: updateError } = await supabase
