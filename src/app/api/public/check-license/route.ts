@@ -97,6 +97,19 @@ export async function POST(request: NextRequest) {
     const existingDomain = existingRegistration.registered_domain ? normalizeDomain(existingRegistration.registered_domain.trim()) : "";
     const incomingDomain = domain ? normalizeDomain(domain) : "";
 
+    const isStagingDomain = (d: string): boolean => {
+      const stagingPatterns = [
+        "localhost",
+        ".local",
+        ".test",
+        ".hostingersite.com",
+        "staging.",
+        "dev.",
+        "sandbox."
+      ];
+      return stagingPatterns.some(pattern => d.includes(pattern));
+    };
+
     if (!existingDomain && incomingDomain) {
       const { error: updateError } = await supabase
         .from("project_plugin_registrations")
@@ -110,10 +123,26 @@ export async function POST(request: NextRequest) {
         );
       }
     } else if (existingDomain && incomingDomain && existingDomain !== incomingDomain) {
-      return NextResponse.json(
-        { error: `This license is already registered on another domain: ${existingRegistration.registered_domain}`, valid: false },
-        { status: 409, headers: CORS_HEADERS },
-      );
+      // If the currently registered domain is a staging domain, allow updating it to the new domain
+      if (isStagingDomain(existingDomain)) {
+        const { error: updateError } = await supabase
+          .from("project_plugin_registrations")
+          .update({ registered_domain: domain })
+          .eq("id", existingRegistration.id);
+
+        if (updateError) {
+          return NextResponse.json(
+            { error: updateError.message },
+            { status: 500, headers: CORS_HEADERS },
+          );
+        }
+      } else if (!isStagingDomain(incomingDomain)) {
+        // If neither the old nor the new domain is a staging domain, enforce the lock
+        return NextResponse.json(
+          { error: `This license is already registered on another domain: ${existingRegistration.registered_domain}`, valid: false },
+          { status: 409, headers: CORS_HEADERS },
+        );
+      }
     }
 
     return NextResponse.json(
