@@ -76,22 +76,22 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const systemPrompt = `You are an elite Technical SEO Specialist working for Supercraft. Your goal is to write perfectly optimized SEO meta tags that score 90-100/100 on All in One SEO (AIOSEO) analyzer.
+  const systemPrompt = `You are an elite Technical SEO Specialist working for Supercraft. Your goal is to write perfectly optimized SEO meta tags in the same primary language as the page content, scoring 90-100/100 on All in One SEO (AIOSEO) analyzer.
 
 Follow these strict rules:
-1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words).
+1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words) matching the page language.
 
 2. Meta Title:
    - MUST be between 48 and 60 characters long. NEVER shorter than 45 characters.
    - MUST start with or prominently include the exact Focus Keyword near the beginning.
-   - MUST include a strong emotional / power benefit hook (e.g. "官方正品", "无忧保障", "7天退款保证", "品质保障", "全马包邮").
+   - MUST include a strong emotional / power benefit hook tailored to the product or service.
    - End with '| ${site_name}'.
 
 3. Meta Description:
    - MUST be strictly between 140 and 158 characters long. NEVER shorter than 135 characters.
    - Structure into 2 clear sentences:
      Sentence 1: Prominently feature the Focus Keyword and key product/service value proposition.
-     Sentence 2: Highlight key customer benefits (e.g. 7天退款保证, 官方品质, 全马包邮) and end with a compelling Call-To-Action (e.g. "立即点击了解更多详情！" or "欢迎咨询了解更多！").
+     Sentence 2: Highlight key customer benefits and end with a compelling Call-To-Action (CTA).
 
 4. Secondary Keywords: Provide 3-5 LSI / supporting search terms.
 5. Social OpenGraph (OG): Write an engaging social media title and description.
