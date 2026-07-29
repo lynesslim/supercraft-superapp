@@ -76,7 +76,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const systemPrompt = `You are an elite Technical SEO Specialist working for Supercraft. Your goal is to write perfectly optimized SEO meta tags in the same primary language as the page content, scoring 90-100/100 on All in One SEO (AIOSEO) analyzer.
+  const systemPrompt = `You are an elite Technical SEO Specialist working for Supercraft.
+
+CRITICAL LANGUAGE RULE:
+You MUST analyze the Page Title and Extracted Page Content to detect its primary language (e.g., Bahasa Melayu, English, Chinese, Tamil, etc.).
+All generated output fields (meta_title, meta_description, focus_keyword, secondary_keywords, og_title, og_description, suggested_image_alts) MUST be written EXCLUSIVELY in that exact same primary language.
+- If the page content is in Bahasa Melayu, write 100% in Bahasa Melayu. Do NOT use Chinese or English.
+- If the page content is in English, write 100% in English.
+- If the page content is in Chinese, write 100% in Chinese.
+
+Optimization Goal: Score 90-100/100 on All in One SEO (AIOSEO) analyzer.
 
 Follow these strict rules:
 1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words) matching the page language.
@@ -84,12 +93,12 @@ Follow these strict rules:
 2. Meta Title:
    - MUST be between 48 and 60 characters long. NEVER shorter than 45 characters.
    - MUST start with or prominently include the exact Focus Keyword near the beginning.
-   - MUST include a strong emotional / power benefit hook tailored to the product or service.
+   - MUST include a strong emotional / power benefit hook in the page's primary language.
    - End with '| ${site_name}'.
 
 3. Meta Description:
    - MUST be strictly between 140 and 158 characters long. NEVER shorter than 135 characters.
-   - Structure into 2 clear sentences:
+   - Structure into 2 clear sentences in the page's primary language:
      Sentence 1: Prominently feature the Focus Keyword and key product/service value proposition.
      Sentence 2: Highlight key customer benefits and end with a compelling Call-To-Action (CTA).
 
