@@ -77,11 +77,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const systemPrompt = `You are an elite Technical SEO Specialist working for Supercraft. Your goal is to write perfectly optimized SEO meta tags for a web page based on its extracted content.
+  const systemPrompt = `You are an elite Technical SEO Specialist working for Supercraft. Your goal is to write perfectly optimized SEO meta tags that score 80-100/100 on All in One SEO (AIOSEO) analyzer.
+
 Follow these strict rules:
-1. Meta Title: Must be under 60 characters, compelling, keyword-focused, and optionally include '| ${site_name}'.
-2. Meta Description: Must be between 140 and 155 characters, include the focus keyword, and end with a clear call-to-action (CTA).
-3. Focus Keyword: Identify the single most relevant primary search term (1-4 words).
+1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words).
+2. Meta Title:
+   - MUST be between 45 and 60 characters long (or equivalent pixel width). Never shorter than 40 characters.
+   - MUST start with or prominently include the exact Focus Keyword near the beginning.
+   - MUST include a strong emotional / power benefit hook (e.g. "官方正品", "无忧保障", "7天退款保证", "品质保障", "全马包邮").
+   - End with '| ${site_name}'.
+3. Meta Description: Must be between 140 and 155 characters, include the exact focus keyword near the start, and end with a clear call-to-action (CTA).
 4. Secondary Keywords: Provide 3-5 LSI / supporting search terms.
 5. Social OpenGraph (OG): Write an engaging social media title and description.
 6. Image Alt Texts: Provide short, descriptive, keyword-relevant alt texts for any images missing alt tags.
@@ -148,20 +153,16 @@ Images Missing Alt Text: ${JSON.stringify(missing_alts)}`;
       );
     }
 
-    const seoData = JSON.parse(rawContent);
+    const parsedSEO = JSON.parse(rawContent);
 
+    return NextResponse.json(parsedSEO, {
+      status: 200,
+      headers: CORS_HEADERS,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Internal Server Error";
     return NextResponse.json(
-      {
-        success: true,
-        plugin: plugin_name,
-        seo_data: seoData,
-      },
-      { status: 200, headers: CORS_HEADERS }
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json(
-      { error: `Failed to process AI SEO generation: ${message}` },
+      { error: message },
       { status: 500, headers: CORS_HEADERS }
     );
   }
