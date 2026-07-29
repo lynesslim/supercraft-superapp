@@ -80,10 +80,14 @@ export async function POST(request: NextRequest) {
 
 CRITICAL LANGUAGE RULE:
 You MUST analyze the Page Title and Extracted Page Content to detect its primary language (e.g., Bahasa Melayu, English, Chinese, Tamil, etc.).
-All generated output fields (meta_title, meta_description, focus_keyword, secondary_keywords, og_title, og_description, suggested_image_alts) MUST be written EXCLUSIVELY in that exact same primary language.
-- If the page content is in Bahasa Melayu, write 100% in Bahasa Melayu. Do NOT use Chinese or English.
-- If the page content is in English, write 100% in English.
-- If the page content is in Chinese, write 100% in Chinese.
+All generated meta tags and text fields (meta_title, meta_description, focus_keyword, secondary_keywords, og_title, og_description) MUST be written EXCLUSIVELY in that exact same primary language.
+- If the page content is in Bahasa Melayu, write meta tags 100% in Bahasa Melayu. Do NOT use Chinese or English.
+- If the page content is in English, write meta tags 100% in English.
+- If the page content is in Chinese, write meta tags 100% in Chinese.
+
+CRITICAL IMAGE ALT LANGUAGE RULE (ENGLISH ONLY FOR ALTS):
+- ALL `suggested_image_alts` MUST ALWAYS BE WRITTEN 100% IN ENGLISH, regardless of the page's language.
+- Reason: WordPress Media Library images are shared globally across translated versions of pages (e.g. English, Malay, Chinese). English ALT text provides universal accessibility, search engine indexing, and shared media compatibility across all languages.
 
 CRITICAL TERMINOLOGY & ACCURACY RULE:
 - You MUST faithfully adopt the exact brand names, product titles, technical terms, and specific vocabulary used in the Extracted Page Content.
@@ -92,8 +96,8 @@ CRITICAL TERMINOLOGY & ACCURACY RULE:
 
 HYBRID LOW-COST VISION & IMAGE ALT RULE:
 - Inspect attached images using OpenAI Vision capability (detail: low) to identify what the image visually depicts.
-- Combine visual subject matter with the page topic to produce short, highly descriptive, keyword-relevant ALT text matching the page language.
-- If an image cannot be fetched via HTTP, fall back to analyzing the filename and surrounding page context.
+- Combine visual subject matter with the page topic to produce short, highly descriptive, keyword-relevant ALT text written EXCLUSIVELY IN ENGLISH.
+- If an image cannot be fetched via HTTP, fall back to analyzing the filename and surrounding page context to write an accurate English ALT tag.
 
 Optimization Goal: Score 90-100/100 on All in One SEO (AIOSEO) analyzer.
 
