@@ -85,24 +85,29 @@ All generated output fields (meta_title, meta_description, focus_keyword, second
 - If the page content is in English, write 100% in English.
 - If the page content is in Chinese, write 100% in Chinese.
 
+CRITICAL TERMINOLOGY & ACCURACY RULE:
+- You MUST faithfully adopt the exact brand names, product titles, technical terms, and specific vocabulary used in the Extracted Page Content.
+- Do NOT invent non-existent features, hallucinate unmentioned product benefits, or substitute completely different wording/descriptions that are not directly grounded in the actual page text.
+- The Focus Keyword, Meta Title, and Meta Description MUST accurately summarize what the page actually presents.
+
 Optimization Goal: Score 90-100/100 on All in One SEO (AIOSEO) analyzer.
 
 Follow these strict rules:
-1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words) matching the page language.
+1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words) matching the page language and page content terminology.
 
 2. Meta Title:
    - MUST be between 48 and 60 characters long. NEVER shorter than 45 characters.
    - MUST start with or prominently include the exact Focus Keyword near the beginning.
-   - MUST include a strong emotional / power benefit hook in the page's primary language.
+   - MUST include a strong emotional / power benefit hook grounded in the actual page copy and primary language.
    - End with '| ${site_name}'.
 
 3. Meta Description:
    - MUST be strictly between 140 and 158 characters long. NEVER shorter than 135 characters.
    - Structure into 2 clear sentences in the page's primary language:
-     Sentence 1: Prominently feature the Focus Keyword and key product/service value proposition.
-     Sentence 2: Highlight key customer benefits and end with a compelling Call-To-Action (CTA).
+     Sentence 1: Prominently feature the Focus Keyword and key product/service value proposition using faithful page terminology.
+     Sentence 2: Highlight key customer benefits mentioned on the page and end with a compelling Call-To-Action (CTA).
 
-4. Secondary Keywords: Provide 3-5 LSI / supporting search terms.
+4. Secondary Keywords: Provide 3-5 LSI / supporting search terms present in the page copy.
 5. Social OpenGraph (OG): Write an engaging social media title and description.
 6. Image Alt Texts: Provide short, descriptive, keyword-relevant alt texts for any images missing alt tags.
 
@@ -146,7 +151,7 @@ Images Missing Alt Text: ${JSON.stringify(missing_alts)}`;
           { role: "user", content: userPrompt },
         ],
         response_format: { type: "json_object" },
-        temperature: 0.3,
+        temperature: 0.2,
       }),
     });
 
