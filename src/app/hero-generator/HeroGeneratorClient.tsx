@@ -46,13 +46,15 @@ export default function HeroGeneratorClient() {
   const [randomSeed] = useState(() => Math.random());
   
   // Selection states
+  const [generationMode, setGenerationMode] = useState<"project" | "adhoc">("project");
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [adhocName, setAdhocName] = useState<string>("");
+  const [adhocDetails, setAdhocDetails] = useState<string>("");
   const [selectedRefs, setSelectedRefs] = useState<string[]>([]);
   const [themePreference, setThemePreference] = useState<"light" | "dark" | "both">("both");
   const [accentColor, setAccentColor] = useState<string>("#a3b840");
   const [customLogoUrl, setCustomLogoUrl] = useState<string>("");
   const [additionalInstruction, setAdditionalInstruction] = useState<string>("");
-
 
   
   // Search and dropdown state for active project
@@ -295,7 +297,7 @@ export default function HeroGeneratorClient() {
       if (allDone || jobIdsRef.current.size === 0) {
         if (pollingRef.current) clearInterval(pollingRef.current);
         setIsPolling(false);
-        setNotice("Successfully generated options! Pick your favorites to save.");
+        setNotice("Successfully generated options!");
       }
     }, 5000);
 
@@ -306,7 +308,7 @@ export default function HeroGeneratorClient() {
 
   async function handleGenerate() {
     setErrorNotice("");
-    setNotice("Crafting premium layout prompts and launching gpt-image-2 generators in parallel...");
+    setNotice("Crafting layout prompts and launching generator...");
     setMockupOptions([]);
     setShowResultsView(true);
 
@@ -324,18 +326,29 @@ export default function HeroGeneratorClient() {
       const jobIds: string[] = [];
 
       for (const item of itemsToProcess) {
+        const payload = generationMode === "project" ? {
+          projectId: selectedProjectId,
+          referenceIds: item.type === "db" ? [item.idOrUrl] : [],
+          theme: themePreference,
+          accentColor,
+          logoUrl: customLogoUrl || null,
+          additionalInstruction,
+          customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
+        } : {
+          adhocName: adhocName.trim() || undefined,
+          adhocDetails: adhocDetails.trim() || undefined,
+          referenceIds: item.type === "db" ? [item.idOrUrl] : [],
+          theme: themePreference,
+          accentColor,
+          logoUrl: customLogoUrl || null,
+          additionalInstruction,
+          customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
+        };
+
         const response = await fetch("/api/hero-generator/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            projectId: selectedProjectId,
-            referenceIds: item.type === "db" ? [item.idOrUrl] : [],
-            theme: themePreference,
-            accentColor,
-            logoUrl: customLogoUrl || null,
-            additionalInstruction,
-            customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
-          })
+          body: JSON.stringify(payload)
         });
 
         const textResponse = await response.text();
@@ -373,7 +386,7 @@ export default function HeroGeneratorClient() {
 
   async function handleSaveMockup(optionIndex: number) {
     const option = mockupOptions[optionIndex];
-    if (option.saved) return;
+    if (option.saved || generationMode === "adhoc") return;
 
     setIsSavingIndex(optionIndex);
     try {
@@ -421,7 +434,7 @@ export default function HeroGeneratorClient() {
               Hero Section Mockups.
             </h1>
             <p className="mt-2 text-sm leading-relaxed text-white/50">
-              Select projects, choose visual references, and generate 5 layout mockups in parallel.
+              Select existing projects or generate ad hoc mockups on-the-fly with custom parameters.
             </p>
           </div>
         </header>
@@ -435,76 +448,135 @@ export default function HeroGeneratorClient() {
               Configure Mockup
             </h2>
 
-            {/* Step 1: Select Project with Search */}
-            <div className="flex flex-col gap-2 relative">
-              <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
-                1. Select Active Project
-              </label>
-              
-              <div className="relative">
+            {/* Step 1: Generation Mode & Project / Ad-Hoc Setup */}
+            <div className="flex flex-col gap-3">
+              <div className="flex rounded-lg border border-white/10 bg-[#111310] p-1">
                 <button
                   type="button"
-                  onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
-                  className="w-full flex items-center justify-between rounded-lg border border-white/10 bg-[#111310] px-4 py-3 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60 text-left"
+                  onClick={() => setGenerationMode("project")}
+                  className={`flex-1 rounded-md py-1.5 text-xs font-bold transition ${
+                    generationMode === "project"
+                      ? "bg-[#a3b840] text-[#111310] shadow"
+                      : "text-white/60 hover:text-white"
+                  }`}
                 >
-                  <span className="truncate">
-                    {activeProject ? activeProject.name : "Select a project..."}
-                  </span>
-                  <ChevronDown size={16} className={`text-white/40 transition-transform ${isProjectDropdownOpen ? "rotate-180" : ""}`} />
+                  Existing Project
                 </button>
-
-                {isProjectDropdownOpen && (
-                  <>
-                    <div 
-                      className="fixed inset-0 z-10" 
-                      onClick={() => setIsProjectDropdownOpen(false)}
-                    />
-                    
-                    <div className="absolute left-0 right-0 mt-1.5 rounded-lg border border-white/10 bg-[#171914] shadow-2xl p-2 z-20 flex flex-col gap-2 max-h-60">
-                      <div className="relative flex items-center">
-                        <Search size={14} className="absolute left-3 text-white/30" />
-                        <input
-                          type="text"
-                          placeholder="Search projects..."
-                          value={projectSearch}
-                          onChange={(e) => setProjectSearch(e.target.value)}
-                          className="w-full rounded bg-[#111310] border border-white/5 pl-9 pr-3 py-1.5 text-xs text-[#e8eae0] outline-none placeholder-white/20 focus:border-[#a3b840]/40"
-                          autoFocus
-                        />
-                      </div>
-                      
-                      <div className="overflow-y-auto flex-1 flex flex-col gap-0.5 pr-1">
-                        {projects
-                          .filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
-                          .map(p => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedProjectId(p.id);
-                                setIsProjectDropdownOpen(false);
-                                setProjectSearch("");
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs rounded transition flex items-center justify-between ${
-                                selectedProjectId === p.id 
-                                  ? "bg-[#a3b840]/10 text-[#c8db5a] font-bold" 
-                                  : "text-white/70 hover:bg-white/5 hover:text-white"
-                              }`}
-                            >
-                              <span className="truncate">{p.name}</span>
-                              {selectedProjectId === p.id && <Check size={12} strokeWidth={3} />}
-                            </button>
-                          ))}
-                        {projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
-                          <div className="text-[10px] text-white/30 text-center py-4">
-                            No projects found
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setGenerationMode("adhoc")}
+                  className={`flex-1 rounded-md py-1.5 text-xs font-bold transition ${
+                    generationMode === "adhoc"
+                      ? "bg-[#a3b840] text-[#111310] shadow"
+                      : "text-white/60 hover:text-white"
+                  }`}
+                >
+                  Ad-Hoc Generation
+                </button>
               </div>
+
+              {generationMode === "project" ? (
+                <div className="flex flex-col gap-2 relative">
+                  <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
+                    1. Select Active Project
+                  </label>
+                  
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsProjectDropdownOpen(!isProjectDropdownOpen)}
+                      className="w-full flex items-center justify-between rounded-lg border border-white/10 bg-[#111310] px-4 py-3 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60 text-left"
+                    >
+                      <span className="truncate">
+                        {activeProject ? activeProject.name : "Select a project..."}
+                      </span>
+                      <ChevronDown size={16} className={`text-white/40 transition-transform ${isProjectDropdownOpen ? "rotate-180" : ""}`} />
+                    </button>
+
+                    {isProjectDropdownOpen && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-10" 
+                          onClick={() => setIsProjectDropdownOpen(false)}
+                        />
+                        
+                        <div className="absolute left-0 right-0 mt-1.5 rounded-lg border border-white/10 bg-[#171914] shadow-2xl p-2 z-20 flex flex-col gap-2 max-h-60">
+                          <div className="relative flex items-center">
+                            <Search size={14} className="absolute left-3 text-white/30" />
+                            <input
+                              type="text"
+                              placeholder="Search projects..."
+                              value={projectSearch}
+                              onChange={(e) => setProjectSearch(e.target.value)}
+                              className="w-full rounded bg-[#111310] border border-white/5 pl-9 pr-3 py-1.5 text-xs text-[#e8eae0] outline-none placeholder-white/20 focus:border-[#a3b840]/40"
+                              autoFocus
+                            />
+                          </div>
+                          
+                          <div className="overflow-y-auto flex-1 flex flex-col gap-0.5 pr-1">
+                            {projects
+                              .filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
+                              .map(p => (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedProjectId(p.id);
+                                    setIsProjectDropdownOpen(false);
+                                    setProjectSearch("");
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs rounded transition flex items-center justify-between ${
+                                    selectedProjectId === p.id 
+                                      ? "bg-[#a3b840]/10 text-[#c8db5a] font-bold" 
+                                      : "text-white/70 hover:bg-white/5 hover:text-white"
+                                  }`}
+                                >
+                                  <span className="truncate">{p.name}</span>
+                                  {selectedProjectId === p.id && <Check size={12} strokeWidth={3} />}
+                                </button>
+                              ))}
+                            {projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
+                              <div className="text-[10px] text-white/30 text-center py-4">
+                                No projects found
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
+                        Project / Brand Name
+                      </label>
+                      <span className="text-[10px] font-mono text-white/35">Optional</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={adhocName}
+                      onChange={(e) => setAdhocName(e.target.value)}
+                      placeholder="e.g. Acme SaaS (Optional)"
+                      className="rounded-lg border border-white/10 bg-[#111310] px-4 py-2.5 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
+                      Project Details / Context
+                    </label>
+                    <textarea
+                      value={adhocDetails}
+                      onChange={(e) => setAdhocDetails(e.target.value)}
+                      placeholder="e.g. Next-gen AI analytics tool for enterprise teams. Sleek dark dashboard layout."
+                      className="w-full rounded-lg border border-white/10 bg-[#111310] px-4 py-2.5 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60 resize-y min-h-16"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Step 2: Theme Settings */}
@@ -536,7 +608,7 @@ export default function HeroGeneratorClient() {
                 <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
                   3. Color Palette / Accent
                 </label>
-                {activeProject?.accent_color && (
+                {generationMode === "project" && activeProject?.accent_color && (
                   <span className="text-[10px] bg-white/5 text-[#a3b840] px-1.5 py-0.5 rounded font-mono">
                     Project Default Set
                   </span>
@@ -611,7 +683,7 @@ export default function HeroGeneratorClient() {
 
             <button
               onClick={handleGenerate}
-              disabled={isPolling || !selectedProjectId}
+              disabled={isPolling || (generationMode === "project" && !selectedProjectId)}
               className="motion-lift mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[#a3b840] py-4 text-sm font-bold text-[#111310] shadow-xl shadow-[#a3b840]/10 hover:bg-[#c8db5a] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Sparkles size={16} />
@@ -621,6 +693,7 @@ export default function HeroGeneratorClient() {
 
           {/* Reference Library & Results Chamber */}
           <div className="flex flex-col gap-8">
+
             
             {/* Custom Reference Upload */}
             {!isPolling && !showResultsView && (
@@ -855,26 +928,32 @@ export default function HeroGeneratorClient() {
                           </p>
                         </div>
 
-                        <button
-                          onClick={() => handleSaveMockup(idx)}
-                          disabled={opt.saved || isSavingIndex === idx}
-                          className={`rounded-lg px-3 py-2 text-xs font-extrabold flex items-center gap-1.5 transition ${
-                            opt.saved
-                              ? "bg-white/5 text-[#a3b840] border border-[#a3b840]/25 cursor-default"
-                              : "bg-[#a3b840] text-[#111310] hover:bg-[#c8db5a]"
-                          }`}
-                        >
-                          {isSavingIndex === idx ? (
-                            <span>Saving...</span>
-                          ) : opt.saved ? (
-                            <>
-                              <Check size={12} strokeWidth={3} />
-                              <span>Saved</span>
-                            </>
-                          ) : (
-                            <span>Save to Project</span>
-                          )}
-                        </button>
+                        {generationMode === "project" && selectedProjectId ? (
+                          <button
+                            onClick={() => handleSaveMockup(idx)}
+                            disabled={opt.saved || isSavingIndex === idx}
+                            className={`rounded-lg px-3 py-2 text-xs font-extrabold flex items-center gap-1.5 transition ${
+                              opt.saved
+                                ? "bg-white/5 text-[#a3b840] border border-[#a3b840]/25 cursor-default"
+                                : "bg-[#a3b840] text-[#111310] hover:bg-[#c8db5a]"
+                            }`}
+                          >
+                            {isSavingIndex === idx ? (
+                              <span>Saving...</span>
+                            ) : opt.saved ? (
+                              <>
+                                <Check size={12} strokeWidth={3} />
+                                <span>Saved</span>
+                              </>
+                            ) : (
+                              <span>Save to Project</span>
+                            )}
+                          </button>
+                        ) : (
+                          <span className="rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5 text-[10px] font-medium text-white/40">
+                            Ad-Hoc One-Off
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))}

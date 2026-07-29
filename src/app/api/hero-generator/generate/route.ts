@@ -8,7 +8,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 export const maxDuration = 300;
 
 type GenerateRequest = {
-  projectId: string;
+  projectId?: string;
+  adhocName?: string;
+  adhocDetails?: string;
   referenceIds: string[];
   theme: "light" | "dark" | "both";
   accentColor?: string;
@@ -23,7 +25,7 @@ async function processGeneration(
   body: GenerateRequest
 ) {
   try {
-    const { projectId, referenceIds, theme, accentColor = "#a3b840", logoUrl, additionalInstruction = "", customReferenceUrls } = body;
+    const { projectId, adhocName, adhocDetails, referenceIds, theme, accentColor = "#a3b840", logoUrl, additionalInstruction = "", customReferenceUrls } = body;
 
     const { data: promptRow } = await supabase
       .from("system_prompts")
@@ -34,15 +36,27 @@ async function processGeneration(
     const systemPromptBase = promptRow?.prompt_text ||
       "Generate a premium landing page hero section mockup. Color palette includes {{accent_color}}. Theme setting: {{theme}}. Styled with: {{aesthetics}}.";
 
-    const { data: projectRow } = await supabase
-      .from("projects")
-      .select("name, summary, industry")
-      .eq("id", projectId)
-      .maybeSingle();
+    let projectName = "Active Project";
+    let projectSummary = "A premium digital product workspace.";
+    let projectIndustry = "Technology";
 
-    const projectName = projectRow?.name || "Active Project";
-    const projectSummary = projectRow?.summary || "A premium digital product workspace.";
-    const projectIndustry = projectRow?.industry || "Technology";
+    if (projectId) {
+      const { data: projectRow } = await supabase
+        .from("projects")
+        .select("name, summary, industry")
+        .eq("id", projectId)
+        .maybeSingle();
+
+      if (projectRow) {
+        projectName = projectRow.name || projectName;
+        projectSummary = projectRow.summary || projectSummary;
+        projectIndustry = projectRow.industry || projectIndustry;
+      }
+    } else {
+      projectName = adhocName?.trim() || "";
+      projectSummary = adhocDetails?.trim() || additionalInstruction?.trim() || "A digital product landing page.";
+      projectIndustry = "General";
+    }
 
     let refsData: Array<{ title: string; tags: string[]; image_url: string }> = [];
     if (referenceIds && referenceIds.length > 0) {
@@ -159,16 +173,27 @@ export async function POST(request: Request) {
 
   const { projectId } = body;
 
-  if (!projectId) {
-    return NextResponse.json({ error: "Project ID is required." }, { status: 400 });
-  }
-
   const supabase = createAdminClient();
+
+  let jobProjectId = projectId || null;
+
+  if (!jobProjectId) {
+    // If ad-hoc mode, use an existing project ID as fallback to satisfy FK constraint if migration has not run
+    const { data: fallbackProject } = await supabase
+      .from("projects")
+      .select("id")
+      .limit(1)
+      .maybeSingle();
+
+    if (fallbackProject?.id) {
+      jobProjectId = fallbackProject.id;
+    }
+  }
 
   try {
     const { data: job, error: insertError } = await supabase
       .from("mockup_jobs")
-      .insert({ project_id: projectId, status: "pending" })
+      .insert({ project_id: jobProjectId, status: "pending" })
       .select("id")
       .single();
 
