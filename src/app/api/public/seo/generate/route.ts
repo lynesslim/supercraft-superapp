@@ -90,6 +90,10 @@ CRITICAL TERMINOLOGY & ACCURACY RULE:
 - Do NOT invent non-existent features, hallucinate unmentioned product benefits, or substitute completely different wording/descriptions that are not directly grounded in the actual page text.
 - The Focus Keyword, Meta Title, and Meta Description MUST accurately summarize what the page actually presents.
 
+CRITICAL VISION & IMAGE ALT RULE:
+- Inspect attached images using OpenAI Vision capability to identify what the image visually depicts.
+- Combine visual subject matter with the page topic to produce short, highly descriptive, keyword-relevant ALT text matching the page language.
+
 Optimization Goal: Score 90-100/100 on All in One SEO (AIOSEO) analyzer.
 
 Follow these strict rules:
@@ -109,7 +113,7 @@ Follow these strict rules:
 
 4. Secondary Keywords: Provide 3-5 LSI / supporting search terms present in the page copy.
 5. Social OpenGraph (OG): Write an engaging social media title and description.
-6. Image Alt Texts: Provide short, descriptive, keyword-relevant alt texts for any images missing alt tags.
+6. Image Alt Texts: Provide short, descriptive, keyword-relevant alt texts based on Vision visual content + page context for any images missing alt tags.
 
 Tone/Voice guidelines: ${brand_voice}.
 
@@ -129,13 +133,38 @@ You MUST respond strictly with a JSON object matching this schema:
   ]
 }`;
 
-  const userPrompt = `Page Title: ${page_title}
+  // Build Multimodal User Message Array with OpenAI Vision Support
+  const userContentArray: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string; detail: "low" | "high" } }
+  > = [
+    {
+      type: "text",
+      text: `Page Title: ${page_title}
 Site Name: ${site_name}
 
 Extracted Page Content:
 ${content}
 
-Images Missing Alt Text: ${JSON.stringify(missing_alts)}`;
+The following image URLs are missing ALT text on this page. Inspect their visual contents (via Vision) and filenames to generate short, highly descriptive, keyword-relevant ALT text matching the page language and actual visual subject matter:
+${JSON.stringify(missing_alts)}`,
+    },
+  ];
+
+  // Append Vision image URLs if valid public HTTP/HTTPS URLs
+  if (Array.isArray(missing_alts)) {
+    missing_alts.slice(0, 5).forEach((imgUrl) => {
+      if (typeof imgUrl === "string" && (imgUrl.startsWith("http://") || imgUrl.startsWith("https://"))) {
+        userContentArray.push({
+          type: "image_url",
+          image_url: {
+            url: imgUrl,
+            detail: "low",
+          },
+        });
+      }
+    });
+  }
 
   try {
     const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -148,7 +177,7 @@ Images Missing Alt Text: ${JSON.stringify(missing_alts)}`;
         model: model || "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
+          { role: "user", content: userContentArray },
         ],
         response_format: { type: "json_object" },
         temperature: 0.2,
