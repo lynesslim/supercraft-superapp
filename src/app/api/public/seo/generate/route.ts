@@ -179,7 +179,7 @@ ${JSON.stringify(missing_alts, null, 2)}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: model || "gpt-4o-mini",
+        model: model || "gpt-5.4-nano",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userContentArray },
