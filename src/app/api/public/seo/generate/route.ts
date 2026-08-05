@@ -17,6 +17,8 @@ type SEOGeneratePayload = {
   domain?: string;
   post_id?: number;
   site_name?: string;
+  site_language?: string;
+  locale?: string;
   page_title?: string;
   content?: string;
   missing_alts?: string[];
@@ -39,6 +41,8 @@ export async function POST(request: NextRequest) {
     embed_code,
     plugin_name = "supercraft-seo",
     site_name = "WordPress Website",
+    site_language = "",
+    locale = "",
     page_title = "Untitled Page",
     content = "",
     missing_alts = [],
@@ -82,11 +86,13 @@ export async function POST(request: NextRequest) {
   const textSystemPrompt = `You are an elite Technical SEO Specialist working for Supercraft.
 
 CRITICAL LANGUAGE RULE:
-You MUST analyze the Page Title and Extracted Page Content to detect its primary language (e.g., Bahasa Melayu, English, Chinese, Tamil, etc.).
+You MUST analyze the actual text vocabulary inside the Extracted Page Content to detect its primary written language (e.g., English, Bahasa Melayu, Chinese, etc.).
 All generated meta tags and text fields (meta_title, meta_description, focus_keyword, secondary_keywords, og_title, og_description) MUST be written EXCLUSIVELY in that exact same primary language.
-- If the page content is in Bahasa Melayu, write meta tags 100% in Bahasa Melayu. Do NOT use Chinese or English.
-- If the page content is in English, write meta tags 100% in English.
-- If the page content is in Chinese, write meta tags 100% in Chinese.
+- If the Extracted Page Content is written in English, write meta tags 100% in English. Do NOT switch to Bahasa Melayu or any other language, regardless of domain extension (.my), site location, or site name.
+- If the Extracted Page Content is written in Bahasa Melayu, write meta tags 100% in Bahasa Melayu.
+- If the Extracted Page Content is written in Chinese, write meta tags 100% in Chinese.
+- Special Rule for Local Brand Names & Slogans: If a page is written in English but includes local brand names, slogans, or campaign titles in Malay/other languages (e.g., "Janji Sampai"), treat the primary language as English. Keep the local name intact as a proper noun, but write all surrounding meta text in English.
+- Do NOT mix languages into full foreign sentences. Match the primary language of the surrounding body copy.
 
 CRITICAL TERMINOLOGY & ACCURACY RULE:
 - You MUST faithfully adopt the exact brand names, product titles, technical terms, and specific vocabulary used in the Extracted Page Content.
@@ -126,7 +132,7 @@ You MUST respond strictly with a JSON object matching this schema:
 }`;
 
   const textUserPrompt = `Page Title: ${page_title}
-Site Name: ${site_name}
+Site Name: ${site_name}${site_language ? `\nSite Language: ${site_language}` : ""}${locale ? `\nSite Locale: ${locale}` : ""}
 
 Extracted Page Content:
 ${content}`;
