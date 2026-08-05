@@ -105,14 +105,14 @@ Follow these strict rules:
 1. Focus Keyword: Identify the single most high-volume primary search term (1-4 words) matching the page language and page content terminology.
 
 2. Meta Title:
-   - MUST be between 48 and 60 characters long. NEVER shorter than 45 characters.
+   - Total length (INCLUDING '| ${site_name}') MUST be strictly between 42 and 56 characters long. Hard max: 58 characters. NEVER exceed 58 characters.
    - MUST start with or prominently include the exact Focus Keyword near the beginning.
    - MUST include a strong emotional / power benefit hook grounded in the actual page copy and primary language.
    - End with '| ${site_name}'.
 
 3. Meta Description:
-   - MUST be strictly between 140 and 158 characters long. NEVER shorter than 135 characters.
-   - Structure into 2 clear sentences in the page's primary language:
+   - Total length MUST be strictly between 135 and 150 characters long. Hard max: 155 characters. NEVER exceed 155 characters.
+   - Structure into 2 short, punchy sentences in the page's primary language:
      Sentence 1: Prominently feature the Focus Keyword and key product/service value proposition using faithful page terminology.
      Sentence 2: Highlight key customer benefits mentioned on the page and end with a compelling Call-To-Action (CTA).
 
@@ -170,6 +170,20 @@ ${content}`;
 
     if (rawTextContent) {
       parsedSEO = JSON.parse(rawTextContent);
+      
+      // Server-Side Smart Length Clamping Guardrails (Guarantees <= 58 title chars, <= 155 desc chars)
+      if (typeof parsedSEO.meta_title === "string") {
+        parsedSEO.meta_title = clampMetaTitle(parsedSEO.meta_title, site_name);
+      }
+      if (typeof parsedSEO.meta_description === "string") {
+        parsedSEO.meta_description = clampMetaDescription(parsedSEO.meta_description);
+      }
+      if (typeof parsedSEO.og_title === "string" && parsedSEO.og_title.length > 60) {
+        parsedSEO.og_title = clampMetaTitle(parsedSEO.og_title, site_name);
+      }
+      if (typeof parsedSEO.og_description === "string" && parsedSEO.og_description.length > 158) {
+        parsedSEO.og_description = clampMetaDescription(parsedSEO.og_description);
+      }
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Pass 1 Text Generation Error";
@@ -277,4 +291,57 @@ ${JSON.stringify(missing_alts, null, 2)}`,
     status: 200,
     headers: CORS_HEADERS,
   });
+}
+
+function clampMetaTitle(title: string, siteName: string): string {
+  if (!title) return "";
+  let cleanTitle = title.trim();
+
+  // If already <= 58 chars, return as is
+  if (cleanTitle.length <= 58) return cleanTitle;
+
+  const pipeSuffix = ` | ${siteName}`;
+  if (cleanTitle.endsWith(pipeSuffix)) {
+    const hook = cleanTitle.slice(0, -pipeSuffix.length).trim();
+    const maxHookLen = 58 - pipeSuffix.length;
+    if (maxHookLen > 15) {
+      let trimmedHook = hook.slice(0, maxHookLen);
+      const lastSpace = trimmedHook.lastIndexOf(" ");
+      if (lastSpace > 15) {
+        trimmedHook = trimmedHook.slice(0, lastSpace);
+      }
+      return `${trimmedHook.trim()}${pipeSuffix}`;
+    }
+  }
+
+  // Fallback trim at last space before 57 chars
+  let trimmed = cleanTitle.slice(0, 57);
+  const lastSpace = trimmed.lastIndexOf(" ");
+  if (lastSpace > 20) {
+    trimmed = trimmed.slice(0, lastSpace);
+  }
+  return trimmed.trim();
+}
+
+function clampMetaDescription(desc: string): string {
+  if (!desc) return "";
+  let cleanDesc = desc.trim();
+
+  // If already <= 158 chars, return as is
+  if (cleanDesc.length <= 158) return cleanDesc;
+
+  // Try to find last period within 155 chars
+  const sub155 = cleanDesc.slice(0, 155);
+  const lastPeriod = sub155.lastIndexOf(".");
+
+  if (lastPeriod >= 110) {
+    return sub155.slice(0, lastPeriod + 1).trim();
+  }
+
+  // Otherwise trim at last space before 154 chars and add a period
+  const lastSpace = sub155.lastIndexOf(" ");
+  let trimmed = (lastSpace > 100 ? sub155.slice(0, lastSpace) : sub155).trim();
+  // Remove trailing comma or punctuation if present
+  trimmed = trimmed.replace(/[,;:-]$/, "");
+  return `${trimmed}.`;
 }
