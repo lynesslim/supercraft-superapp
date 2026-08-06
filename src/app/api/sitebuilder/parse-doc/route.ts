@@ -1,4 +1,4 @@
-import { openai } from "@ai-sdk/openai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { generateObject, jsonSchema } from "ai";
 import { NextResponse } from "next/server";
 
@@ -83,20 +83,22 @@ export async function POST(request: Request) {
     );
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  // Dedicated API Key for SiteBuilder usage tracking with fallback to OPENAI_API_KEY
+  const apiKey = process.env.SITEBUILDER_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    // Provide structured fallback parser if OPENAI_API_KEY is not set locally
     const fallbackSitemap = generateFallbackSitemap(document_text);
     return NextResponse.json({
       sitemap: fallbackSitemap,
-      warning: "OPENAI_API_KEY not configured. Used structured fallback parser.",
+      warning: "SITEBUILDER_OPENAI_API_KEY not configured. Used structured fallback parser.",
     });
   }
 
+  const customOpenAI = createOpenAI({ apiKey });
+
   try {
     const result = await generateObject({
-      model: openai("gpt-4o-mini"),
+      model: customOpenAI("gpt-4o-mini"),
       system: `You are a specialized copywriting parser for Supercraft.
 Analyze the copywriting document and extract the sitemap pages and section copy outlines.
 Valid section_type values MUST be one of: ["hero", "about", "features", "testimonials", "cta", "footer"].`,
