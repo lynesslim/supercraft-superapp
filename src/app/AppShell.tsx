@@ -1,6 +1,6 @@
 "use client";
 
-import { FlaskConical, LayoutDashboard, LogOut, Network, Sparkles } from "lucide-react";
+import { FlaskConical, LayoutDashboard, LogOut, Network, Sparkles, Layers, PhoneCall } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -14,6 +14,12 @@ const navItems = [
     icon: LayoutDashboard,
   },
   {
+    href: "/sales-sop",
+    label: "BD Call Script",
+    icon: PhoneCall,
+    superadminOnly: true,
+  },
+  {
     href: "/canvas",
     label: "Canvas",
     icon: Network,
@@ -22,6 +28,11 @@ const navItems = [
     href: "/hero-generator",
     label: "Hero Generator",
     icon: Sparkles,
+  },
+  {
+    href: "/sitebuilder-playground",
+    label: "SiteBuilder Lab",
+    icon: Layers,
   },
   {
     href: "/playground",
