@@ -41,10 +41,30 @@ export async function POST(request: Request) {
     }
 
     const supabase = createAdminClient();
+
+    // Fetch existing scripts to perform a deep/shallow merge
+    let existingScripts: Record<string, unknown> = {};
+    const { data: existingData } = await supabase
+      .from("system_prompts")
+      .select("prompt_text")
+      .eq("name", "sales_sop_scripts")
+      .maybeSingle();
+
+    if (existingData?.prompt_text) {
+      try {
+        existingScripts = JSON.parse(existingData.prompt_text);
+      } catch {}
+    }
+
+    const mergedScripts = {
+      ...existingScripts,
+      ...body.scripts,
+    };
+
     const { error } = await supabase.from("system_prompts").upsert(
       {
         name: "sales_sop_scripts",
-        prompt_text: JSON.stringify(body.scripts),
+        prompt_text: JSON.stringify(mergedScripts),
         updated_at: new Date().toISOString(),
       },
       { onConflict: "name" },

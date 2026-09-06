@@ -11,6 +11,7 @@ const PUBLIC_PATHS = new Set([
 function isPublicPath(pathname: string) {
   return (
     PUBLIC_PATHS.has(pathname) ||
+    pathname.startsWith("/sales-sop") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.match(/\.(?:png|jpg|jpeg|gif|webp|svg|ico)$/)

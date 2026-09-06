@@ -15,7 +15,7 @@ const navItems = [
   },
   {
     href: "/sales-sop",
-    label: "BD Call Script",
+    label: "Sales SOPs",
     icon: PhoneCall,
     superadminOnly: true,
   },

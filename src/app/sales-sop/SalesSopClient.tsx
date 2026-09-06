@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import {
   Play,
   Pause,
@@ -1129,6 +1130,15 @@ ${customEntries ? `### 📝 Additional Questions & Answers\n${customEntries}\n` 
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
           {/* Brand & Goal Badge */}
           <div className="flex items-center gap-3">
+            <Link
+              href="/sales-sop"
+              className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/70 hover:border-[#a3b840]/40 hover:text-[#c8db5a] transition"
+              title="Return to Sales SOP Directory"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">All SOPs</span>
+            </Link>
+
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#a3b840]/20 border border-[#a3b840]/30 text-[#c8db5a]">
               <Headphones className="h-4 w-4" />
             </div>
