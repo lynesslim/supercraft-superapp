@@ -32,4 +32,12 @@ test("adhoc hero mockup generation supports optional project_id and adhoc payloa
   assert.match(clientComponent, /adhocDetails/);
   assert.match(clientComponent, /Ad-Hoc Generation/);
   assert.match(clientComponent, /Ad-Hoc One-Off/);
+
+  // Assert instruction images and mention autocomplete support
+  assert.match(generateRoute, /instructionImages\?: Array/);
+  assert.match(clientComponent, /instructionImages/);
+  assert.match(clientComponent, /handleInstructionImagesUpload/);
+  assert.match(clientComponent, /insertMention/);
+  assert.match(clientComponent, /mentionMenuOpen/);
 });
+

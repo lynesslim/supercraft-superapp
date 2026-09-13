@@ -14,9 +14,9 @@ serve(async (req: Request) => {
   try {
     const rawBody = await req.text()
     console.log(`[generate-hero] Received request. Body length: ${rawBody.length}`)
-    const { prompt, imageUrl, logoUrl, size = "1152x2048" } = JSON.parse(rawBody)
+    const { prompt, imageUrl, logoUrl, size = "1152x2048", instructionImages = [] } = JSON.parse(rawBody)
     
-    console.log(`[generate-hero] Parsed input. Size: ${size}, HasImage: ${!!imageUrl}, HasLogo: ${!!logoUrl}`)
+    console.log(`[generate-hero] Parsed input. Size: ${size}, HasImage: ${!!imageUrl}, HasLogo: ${!!logoUrl}, InstructionImages: ${Array.isArray(instructionImages) ? instructionImages.length : 0}`)
 
     if (!prompt) {
       return new Response(JSON.stringify({ error: "Prompt is required" }), {
@@ -30,8 +30,9 @@ serve(async (req: Request) => {
     formData.append("prompt", prompt)
     formData.append("size", size)
 
-    const hasMultipleImages = !!(imageUrl && logoUrl)
-    const imageKey = hasMultipleImages ? "image[]" : "image"
+    const validInstructionImages = Array.isArray(instructionImages) ? instructionImages : []
+    const totalImages = (imageUrl ? 1 : 0) + (logoUrl ? 1 : 0) + validInstructionImages.length
+    const imageKey = totalImages > 1 ? "image[]" : "image"
 
     if (imageUrl) {
       console.log(`[generate-hero] Fetching reference image: ${imageUrl}`)
@@ -55,6 +56,26 @@ serve(async (req: Request) => {
       const logoBlob = await logoRes.blob()
       console.log(`[generate-hero] Logo image fetched. Size: ${logoBlob.size} bytes`)
       formData.append(imageKey, logoBlob, "logo.png")
+    }
+
+    if (validInstructionImages.length > 0) {
+      for (const [idx, item] of validInstructionImages.entries()) {
+        const itemUrl = typeof item === "string" ? item : item.url
+        const itemLabel = typeof item === "object" && item?.label ? item.label : `Image ${idx + 1}`
+        const rawFileName = typeof item === "object" && item?.fileName ? item.fileName : `instruction-image-${idx + 1}.png`
+        const safeFileName = rawFileName.replace(/[^a-zA-Z0-9._-]/g, "_")
+        if (itemUrl) {
+          console.log(`[generate-hero] Fetching instruction image ${idx + 1} (${itemLabel}): ${itemUrl}`)
+          const itemRes = await fetch(itemUrl)
+          if (!itemRes.ok) {
+            console.warn(`[generate-hero] Failed to fetch instruction image ${idx + 1}. Status: ${itemRes.status}`)
+            continue
+          }
+          const itemBlob = await itemRes.blob()
+          console.log(`[generate-hero] Instruction image ${idx + 1} fetched. Size: ${itemBlob.size} bytes`)
+          formData.append(imageKey, itemBlob, `instruction-${idx + 1}-${safeFileName}`)
+        }
+      }
     }
 
     const openaiBaseUrl = Deno.env.get("OPENAI_BASE_URL") || "https://api.openai.com/v1"

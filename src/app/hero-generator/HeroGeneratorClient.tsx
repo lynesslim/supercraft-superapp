@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { 
-  Sparkles, Check, Eye, Download, Info, Search, ChevronDown, ArrowLeft
+  Sparkles, Check, Eye, Download, Info, Search, ChevronDown, ArrowLeft, Image as ImageIcon, X, AtSign
 } from "lucide-react";
 import Lightbox from "../components/Lightbox";
 
@@ -27,6 +27,14 @@ type MockupOption = {
   saved?: boolean;
   width?: number;
   height?: number;
+};
+
+type InstructionImage = {
+  id: string;
+  index: number;
+  label: string;
+  url: string;
+  fileName: string;
 };
 
 
@@ -56,7 +64,15 @@ export default function HeroGeneratorClient() {
   const [customLogoUrl, setCustomLogoUrl] = useState<string>("");
   const [additionalInstruction, setAdditionalInstruction] = useState<string>("");
 
-  
+  // Instruction Images (Product photos, contextual screenshots) and Mention Dropdown
+  const [instructionImages, setInstructionImages] = useState<InstructionImage[]>([]);
+  const [isUploadingInstructionImages, setIsUploadingInstructionImages] = useState(false);
+  const [mentionMenuOpen, setMentionMenuOpen] = useState(false);
+  const [mentionFilter, setMentionFilter] = useState("");
+  const [selectedMentionIdx, setSelectedMentionIdx] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionMenuRef = useRef<HTMLDivElement | null>(null);
+
   // Search and dropdown state for active project
   const [projectSearch, setProjectSearch] = useState("");
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
@@ -237,6 +253,172 @@ export default function HeroGeneratorClient() {
     }
   }
 
+  // Upload contextual images (product photos, screenshot references) for additional instruction
+  async function handleInstructionImagesUpload(files: FileList | File[]) {
+    if (!files || files.length === 0) return;
+    setIsUploadingInstructionImages(true);
+    try {
+      const fileArray = Array.from(files);
+      const newImages: InstructionImage[] = [];
+      let currentIndex = instructionImages.length;
+
+      for (const file of fileArray) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/hero-generator/upload", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Upload failed for ${file.name}`);
+
+        currentIndex += 1;
+        newImages.push({
+          id: `inst-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+          index: currentIndex,
+          label: `@Image ${currentIndex}`,
+          url: data.url,
+          fileName: file.name,
+        });
+      }
+
+      setInstructionImages(prev => [...prev, ...newImages]);
+      setNotice(`Uploaded ${newImages.length} context image${newImages.length > 1 ? "s" : ""}.`);
+      setTimeout(() => setNotice(""), 3000);
+    } catch (err) {
+      console.error("Instruction images upload error", err);
+      setErrorNotice(err instanceof Error ? err.message : "Failed to upload image(s).");
+    } finally {
+      setIsUploadingInstructionImages(false);
+    }
+  }
+
+  function removeInstructionImage(id: string) {
+    setInstructionImages(prev => {
+      const filtered = prev.filter(img => img.id !== id);
+      return filtered.map((img, idx) => ({
+        ...img,
+        index: idx + 1,
+        label: `@Image ${idx + 1}`,
+      }));
+    });
+  }
+
+  function insertMention(label: string) {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      setAdditionalInstruction(prev => prev ? `${prev} ${label} ` : `${label} `);
+      setMentionMenuOpen(false);
+      return;
+    }
+
+    const value = textarea.value;
+    const cursorPos = textarea.selectionStart ?? value.length;
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const atIndex = textBeforeCursor.lastIndexOf("@");
+
+    let newText = "";
+    let newCursorPos = cursorPos;
+
+    if (atIndex !== -1 && atIndex >= cursorPos - 25) {
+      const textAfterCursor = value.slice(cursorPos);
+      newText = textBeforeCursor.slice(0, atIndex) + `${label} ` + textAfterCursor;
+      newCursorPos = atIndex + label.length + 1;
+    } else {
+      const before = value.slice(0, cursorPos);
+      const after = value.slice(cursorPos);
+      const spaceBefore = before.length > 0 && !before.endsWith(" ") ? " " : "";
+      newText = before + spaceBefore + `${label} ` + after;
+      newCursorPos = cursorPos + spaceBefore.length + label.length + 1;
+    }
+
+    setAdditionalInstruction(newText);
+    setMentionMenuOpen(false);
+    setMentionFilter("");
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 0);
+  }
+
+  function handleAdditionalInstructionChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const val = e.target.value;
+    setAdditionalInstruction(val);
+
+    const cursorPos = e.target.selectionStart;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+
+    if (lastAtIndex !== -1) {
+      const query = textBeforeCursor.slice(lastAtIndex + 1);
+      if (!/\s/.test(query)) {
+        setMentionFilter(query);
+        setMentionMenuOpen(true);
+        setSelectedMentionIdx(0);
+        return;
+      }
+    }
+    setMentionMenuOpen(false);
+  }
+
+  function handleTextareaKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!mentionMenuOpen) return;
+
+    const filtered = instructionImages.filter(img => 
+      img.label.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+      img.fileName.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+      String(img.index).includes(mentionFilter)
+    );
+
+    if (filtered.length === 0) {
+      if (e.key === "Escape") {
+        setMentionMenuOpen(false);
+      }
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedMentionIdx(prev => (prev + 1) % filtered.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedMentionIdx(prev => (prev - 1 + filtered.length) % filtered.length);
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const target = filtered[selectedMentionIdx] || filtered[0];
+      if (target) {
+        insertMention(target.label);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setMentionMenuOpen(false);
+    }
+  }
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        mentionMenuRef.current &&
+        !mentionMenuRef.current.contains(event.target as Node) &&
+        textareaRef.current &&
+        !textareaRef.current.contains(event.target as Node)
+      ) {
+        setMentionMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filteredMentionImages = instructionImages.filter(img => 
+    img.label.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+    img.fileName.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+    String(img.index).includes(mentionFilter)
+  );
+
   function toggleCustomRef(url: string) {
     setSelectedCustomRefs(prev => {
       if (prev.includes(url)) return prev.filter(item => item !== url);
@@ -334,6 +516,12 @@ export default function HeroGeneratorClient() {
           logoUrl: customLogoUrl || null,
           additionalInstruction,
           customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
+          instructionImages: instructionImages.length > 0 ? instructionImages.map(img => ({
+            index: img.index,
+            label: img.label,
+            url: img.url,
+            fileName: img.fileName,
+          })) : undefined,
         } : {
           adhocName: adhocName.trim() || undefined,
           adhocDetails: adhocDetails.trim() || undefined,
@@ -343,6 +531,12 @@ export default function HeroGeneratorClient() {
           logoUrl: customLogoUrl || null,
           additionalInstruction,
           customReferenceUrls: item.type === "custom" ? [item.idOrUrl] : undefined,
+          instructionImages: instructionImages.length > 0 ? instructionImages.map(img => ({
+            index: img.index,
+            label: img.label,
+            url: img.url,
+            fileName: img.fileName,
+          })) : undefined,
         };
 
         const response = await fetch("/api/hero-generator/generate", {
@@ -651,17 +845,154 @@ export default function HeroGeneratorClient() {
               </div>
             </div>
 
-            {/* Step 5: Additional Instruction */}
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
-                5. Additional Instruction
-              </label>
-              <textarea 
-                value={additionalInstruction}
-                onChange={(e) => setAdditionalInstruction(e.target.value)}
-                placeholder="e.g. Sleek mobile app layout, split-screen UX card overlays, and dark themed accent highlights."
-                className="w-full rounded-lg border border-white/10 bg-[#111310] px-4 py-3 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60 resize-y min-h-20"
-              />
+            {/* Step 5: Additional Instruction & Product / Context Images */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold tracking-wider uppercase text-white/45">
+                  5. Additional Instruction & Images
+                </label>
+                <label className={`inline-flex items-center gap-1.5 cursor-pointer rounded-lg px-3 py-1.5 text-xs font-bold transition border ${isUploadingInstructionImages ? "bg-white/10 border-white/20 text-white/40" : "bg-[#a3b840]/10 border-[#a3b840]/30 text-[#c8db5a] hover:bg-[#a3b840]/20"}`}>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    disabled={isUploadingInstructionImages}
+                    onChange={(e) => {
+                      if (e.target.files) {
+                        handleInstructionImagesUpload(e.target.files);
+                        e.target.value = "";
+                      }
+                    }}
+                  />
+                  <span>{isUploadingInstructionImages ? "Uploading..." : "+ Upload Image(s)"}</span>
+                </label>
+              </div>
+
+              {/* Uploaded Instruction Images Preview Gallery */}
+              {instructionImages.length > 0 && (
+                <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-[#161814] p-3">
+                  <div className="flex items-center justify-between text-[11px] text-white/40 pb-1 border-b border-white/5">
+                    <span>Uploaded Context Images (click tag to insert mention):</span>
+                    <span className="text-[#a3b840] font-mono font-bold">{instructionImages.length} image{instructionImages.length > 1 ? "s" : ""}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {instructionImages.map((img) => (
+                      <div
+                        key={img.id}
+                        className="group flex items-center gap-2 rounded-lg border border-white/10 bg-[#0e100d] px-2.5 py-1.5 text-xs transition hover:border-[#a3b840]/60"
+                      >
+                        <img
+                          src={img.url}
+                          alt={img.fileName}
+                          className="h-7 w-7 rounded-md object-cover border border-white/10 flex-shrink-0"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => insertMention(img.label)}
+                          className="font-mono font-bold text-[#c8db5a] hover:underline"
+                          title={`Click to insert ${img.label} into instruction`}
+                        >
+                          {img.label}
+                        </button>
+                        <span className="max-w-[110px] truncate text-[11px] text-white/40" title={img.fileName}>
+                          {img.fileName}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeInstructionImage(img.id)}
+                          className="text-white/30 hover:text-red-400 transition ml-1 px-1 font-bold text-sm"
+                          title="Remove image"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Textarea with @ mention autocomplete dropdown */}
+              <div className="relative">
+                <textarea 
+                  ref={textareaRef}
+                  value={additionalInstruction}
+                  onChange={handleAdditionalInstructionChange}
+                  onKeyDown={handleTextareaKeyDown}
+                  placeholder="e.g. Sleek split layout. Place @Image 1 in the hero showcase card, and use @Image 2 as the secondary feature badge."
+                  className="w-full rounded-lg border border-white/10 bg-[#111310] px-4 py-3 text-sm text-[#e8eae0] outline-none transition focus:border-[#a3b840]/60 resize-y min-h-24"
+                />
+
+                {/* Autocomplete Dropdown Popup */}
+                {mentionMenuOpen && (
+                  <div
+                    ref={mentionMenuRef}
+                    className="absolute left-0 bottom-full mb-2 z-50 w-full max-w-sm rounded-xl border border-[#a3b840]/30 bg-[#151713] p-2 shadow-2xl backdrop-blur-md"
+                  >
+                    <div className="flex items-center justify-between px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-white/40 border-b border-white/10 mb-1">
+                      <span>Mention Reference Image</span>
+                      <span className="text-[10px] text-white/30">↑↓ Navigate • Enter to select</span>
+                    </div>
+                    {filteredMentionImages.length > 0 ? (
+                      <div className="max-h-48 overflow-y-auto space-y-1">
+                        {filteredMentionImages.map((img, idx) => (
+                          <div
+                            key={img.id}
+                            onClick={() => insertMention(img.label)}
+                            onMouseEnter={() => setSelectedMentionIdx(idx)}
+                            className={`flex items-center gap-3 rounded-lg px-2.5 py-2 cursor-pointer transition ${
+                              selectedMentionIdx === idx
+                                ? "bg-[#a3b840]/20 text-[#f3f4ec] border border-[#a3b840]/40"
+                                : "text-white/70 hover:bg-white/5 border border-transparent"
+                            }`}
+                          >
+                            <img
+                              src={img.url}
+                              alt={img.fileName}
+                              className="h-8 w-8 rounded-md object-cover border border-white/10 flex-shrink-0"
+                            />
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-mono text-xs font-bold text-[#c8db5a]">
+                                {img.label}
+                              </span>
+                              <span className="text-[11px] text-white/40 truncate">
+                                {img.fileName}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-3 text-xs text-white/50 flex flex-col gap-2">
+                        <span>
+                          {instructionImages.length === 0
+                            ? "No instruction images uploaded yet."
+                            : "No matching uploaded images."}
+                        </span>
+                        <label className="inline-flex items-center justify-center gap-1.5 cursor-pointer rounded-md bg-[#a3b840]/10 border border-[#a3b840]/30 px-3 py-1.5 text-xs font-semibold text-[#c8db5a] hover:bg-[#a3b840]/20">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              if (e.target.files) {
+                                handleInstructionImagesUpload(e.target.files);
+                                e.target.value = "";
+                              }
+                            }}
+                          />
+                          + Upload Image Now
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-white/35">
+                <span>Tip: Type <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/80 font-mono text-[10px]">@</kbd> to mention product or contextual photos in your prompt.</span>
+              </div>
             </div>
 
 

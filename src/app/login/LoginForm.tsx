@@ -3,36 +3,49 @@
 import { Loader2 } from "lucide-react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useActionState, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { loginAction, type LoginActionState } from "./actions";
 
 export default function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [clientError, setClientError] = useState("");
+  const [isClientSubmitting, setIsClientSubmitting] = useState(false);
+  const [state, formAction, isPending] = useActionState<LoginActionState, FormData>(
+    loginAction,
+    {}
+  );
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
-    setIsSubmitting(true);
+    setClientError("");
+    setIsClientSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get("email") ?? "").trim();
     const password = String(formData.get("password") ?? "");
 
-    const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    try {
+      const supabase = createClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
-    if (signInError) {
-      setError(signInError.message);
-      setIsSubmitting(false);
-      return;
+      if (signInError) {
+        setClientError(signInError.message);
+        setIsClientSubmitting(false);
+        return;
+      }
+
+      router.replace(searchParams.get("next") || "/hero-generator");
+      router.refresh();
+    } catch {
+      // If client-side Supabase encounters an issue, trigger server action directly
+      formAction(formData);
     }
-
-    router.replace(searchParams.get("next") || "/");
-    router.refresh();
   }
+
+  const isSubmitting = isClientSubmitting || isPending;
+  const displayError = clientError || state?.error;
 
   return (
     <main className="grid min-h-screen place-items-center bg-[#111310] px-4 py-8 text-[#e8eae0]">
@@ -57,7 +70,8 @@ export default function LoginForm() {
           Use your assigned Supercraft account. Account creation is managed by an administrator.
         </p>
 
-        <form className="mt-6 grid gap-4" onSubmit={login}>
+        <form className="mt-6 grid gap-4" action={formAction} onSubmit={login}>
+          <input type="hidden" name="next" value={searchParams.get("next") || "/hero-generator"} />
           <label className="grid gap-2 text-sm font-semibold text-white/65">
             Email
             <input
@@ -81,9 +95,9 @@ export default function LoginForm() {
             />
           </label>
 
-          {error ? (
+          {displayError ? (
             <p className="motion-pop rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-              {error}
+              {displayError}
             </p>
           ) : null}
 

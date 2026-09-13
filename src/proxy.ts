@@ -19,6 +19,32 @@ function isPublicPath(pathname: string) {
 }
 
 export async function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // 1. Fast path: Immediately allow static files, Next.js assets, and public routes (except /login check)
+  if (isPublicPath(pathname) && pathname !== "/login") {
+    return NextResponse.next({ request });
+  }
+
+  if (pathname.startsWith("/api")) {
+    return NextResponse.next({ request });
+  }
+
+  const allCookies = request.cookies.getAll();
+  const hasAuthCookie = allCookies.some((c) => c.name.startsWith("sb-") && c.value.length > 10);
+
+  // 2. Fast path: If unauthenticated (no Supabase auth cookies present)
+  if (!hasAuthCookie) {
+    if (pathname === "/login") {
+      return NextResponse.next({ request });
+    }
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+    return NextResponse.redirect(url);
+  }
+
+  // 3. Only perform Supabase network verification when auth cookies are actually present
   let response = NextResponse.next({ request });
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -39,17 +65,22 @@ export async function proxy(request: NextRequest) {
     },
   );
 
-  const { data } = await supabase.auth.getUser();
-  const { pathname } = request.nextUrl;
+  let user = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch {
+    user = null;
+  }
 
-  if (!data.user && !isPublicPath(pathname) && !pathname.startsWith("/api")) {
+  if (!user && !isPublicPath(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(url);
   }
 
-  if (data.user && pathname === "/login") {
+  if (user && pathname === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/";
     url.search = "";

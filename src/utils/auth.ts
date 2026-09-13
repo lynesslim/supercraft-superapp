@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { createAdminClient, createClient } from "@/utils/supabase/server";
 import { logServerError } from "@/utils/server-log";
 
@@ -31,10 +32,15 @@ function getConfiguredSuperadminEmails() {
 }
 
 export async function getAuthContext(): Promise<AuthContext | null> {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getUser();
+  try {
+    const cookieStore = await cookies();
+    const hasAuthCookie = cookieStore.getAll().some((c) => c.name.startsWith("sb-") && c.value.length > 10);
+    if (!hasAuthCookie) return null;
 
-  if (error || !data.user) return null;
+    const supabase = await createClient();
+    const { data, error } = await supabase.auth.getUser();
+
+    if (error || !data.user) return null;
 
   const user = data.user;
   const email = user.email ?? null;
@@ -68,6 +74,9 @@ export async function getAuthContext(): Promise<AuthContext | null> {
     role: role ?? "employee",
     userId: user.id,
   };
+} catch {
+  return null;
+}
 }
 
 export async function requirePageRole(allowedRoles: AppRole[]) {

@@ -6,6 +6,7 @@ const projectRoot = path.resolve(__dirname);
 const nextConfig: NextConfig = {
   devIndicators: false,
   outputFileTracingRoot: projectRoot,
+  allowedDevOrigins: ["127.0.0.1", "*.127.0.0.1", "localhost", "*.localhost"],
   experimental: {
     proxyClientMaxBodySize: "96mb",
   },

@@ -17,6 +17,12 @@ type GenerateRequest = {
   logoUrl?: string;
   additionalInstruction?: string;
   customReferenceUrls?: string[];
+  instructionImages?: Array<{
+    index?: number;
+    label?: string;
+    url: string;
+    fileName?: string;
+  }>;
 };
 
 async function processGeneration(
@@ -25,7 +31,18 @@ async function processGeneration(
   body: GenerateRequest
 ) {
   try {
-    const { projectId, adhocName, adhocDetails, referenceIds, theme, accentColor = "#a3b840", logoUrl, additionalInstruction = "", customReferenceUrls } = body;
+    const {
+      projectId,
+      adhocName,
+      adhocDetails,
+      referenceIds,
+      theme,
+      accentColor = "#a3b840",
+      logoUrl,
+      additionalInstruction = "",
+      customReferenceUrls,
+      instructionImages = [],
+    } = body;
 
     const { data: promptRow } = await supabase
       .from("system_prompts")
@@ -83,7 +100,23 @@ async function processGeneration(
 
     const variationsCount = Math.min(refsData.length, 5);
 
-    console.log(`[DEBUG] Dispatched parallel gpt-image-2 requests. Count: ${variationsCount}`);
+    console.log(`[DEBUG] Dispatched parallel gpt-image-2 requests. Count: ${variationsCount}, InstructionImages: ${instructionImages.length}`);
+
+    // Build context description for any uploaded instruction/product images
+    let instructionImagesContext = "";
+    if (instructionImages && instructionImages.length > 0) {
+      const imageDescriptions = instructionImages.map((img, i) => {
+        const label = img.label || `Image ${img.index || i + 1}`;
+        const name = img.fileName ? ` ("${img.fileName}")` : "";
+        return `- ${label}${name}: attached input image [${label}]`;
+      }).join("\n");
+
+      instructionImagesContext = `\n\n[Referenced Context & Product Images]:\n${imageDescriptions}\nAccurately locate each attached input image corresponding to its label (e.g. ${instructionImages.map((img, i) => img.label || `Image ${img.index || i + 1}`).join(", ")}) and integrate it into the hero section composition as instructed.`;
+    }
+
+    const compiledInstruction = additionalInstruction
+      ? `${additionalInstruction}${instructionImagesContext}`
+      : instructionImagesContext;
 
     const generationPromises = Array.from({ length: variationsCount }).map(async (_, idx) => {
       const ref = refsData[idx];
@@ -93,8 +126,8 @@ async function processGeneration(
       let promptVariation = systemPromptBase
         .replaceAll("{{accent_color}}", accentColor)
         .replaceAll("{{theme}}", theme)
-        .replaceAll("{{additionalinstruction}}", additionalInstruction)
-        .replaceAll("{{aesthetics}}", additionalInstruction || aestheticsText)
+        .replaceAll("{{additionalinstruction}}", compiledInstruction)
+        .replaceAll("{{aesthetics}}", compiledInstruction || aestheticsText)
         .replaceAll("{{project_name}}", projectName)
         .replaceAll("{{project_summary}}", projectSummary)
         .replaceAll("{{industry}}", projectIndustry)
@@ -105,6 +138,10 @@ async function processGeneration(
         promptVariation += ` Fully integrate the company logo from the attached company logo image.`;
       }
 
+      if (instructionImagesContext && !promptVariation.includes("[Referenced Context & Product Images]")) {
+        promptVariation += instructionImagesContext;
+      }
+
       console.log(`[DEBUG] Invoking Supabase Edge Function generate-hero, variation ${idx}`);
 
       const { data: edgeResult, error: edgeError } = await supabase.functions.invoke("generate-hero", {
@@ -112,6 +149,7 @@ async function processGeneration(
           prompt: promptVariation,
           imageUrl: imageUrlText || undefined,
           logoUrl: logoUrl || undefined,
+          instructionImages: instructionImages.length > 0 ? instructionImages : undefined,
           size: "1152x2048",
         },
       });
