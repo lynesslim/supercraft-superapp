@@ -106,17 +106,25 @@ async function processGeneration(
     let instructionImagesContext = "";
     if (instructionImages && instructionImages.length > 0) {
       const imageDescriptions = instructionImages.map((img, i) => {
-        const label = img.label || `Image ${img.index || i + 1}`;
-        const name = img.fileName ? ` ("${img.fileName}")` : "";
-        return `- ${label}${name}: attached input image [${label}]`;
+        const label = img.label || `@Image ${img.index || i + 1}`;
+        const name = img.fileName ? ` (filename: "${img.fileName}")` : "";
+        return `- ${label}${name}: attached reference asset [Image ${i + 1}]`;
       }).join("\n");
 
-      instructionImagesContext = `\n\n[Referenced Context & Product Images]:\n${imageDescriptions}\nAccurately locate each attached input image corresponding to its label (e.g. ${instructionImages.map((img, i) => img.label || `Image ${img.index || i + 1}`).join(", ")}) and integrate it into the hero section composition as instructed.`;
+      instructionImagesContext = `[Attached Product & Context Images]:
+${imageDescriptions}
+
+CRITICAL VISUAL REQUIREMENT:
+The user has attached ${instructionImages.length} specific product/context image(s) listed above. Whenever the instructions mention ${instructionImages.map((img, i) => img.label || `@Image ${img.index || i + 1}`).join(", ")}, you MUST accurately recognize that specific item from the attached input images and visibly integrate it as the central hero visual asset in the mockup. Do not replace it with an arbitrary generic stock placeholder.`;
     }
 
-    const compiledInstruction = additionalInstruction
-      ? `${additionalInstruction}${instructionImagesContext}`
-      : instructionImagesContext;
+    const userInstructions = additionalInstruction?.trim() || "";
+    let combinedInstructions = userInstructions;
+    if (instructionImagesContext) {
+      combinedInstructions = userInstructions
+        ? `${userInstructions}\n\n${instructionImagesContext}`
+        : instructionImagesContext;
+    }
 
     const generationPromises = Array.from({ length: variationsCount }).map(async (_, idx) => {
       const ref = refsData[idx];
@@ -126,43 +134,33 @@ async function processGeneration(
       let promptVariation = systemPromptBase
         .replaceAll("{{accent_color}}", accentColor)
         .replaceAll("{{theme}}", theme)
-        .replaceAll("{{additionalinstruction}}", compiledInstruction)
-        .replaceAll("{{aesthetics}}", compiledInstruction || aestheticsText)
+        .replaceAll("{{additionalinstructions}}", combinedInstructions || "Create a clean, high-converting hero layout.")
+        .replaceAll("{{additionalinstruction}}", combinedInstructions || "Create a clean, high-converting hero layout.")
+        .replaceAll("{{aesthetics}}", aestheticsText)
         .replaceAll("{{project_name}}", projectName)
         .replaceAll("{{project_summary}}", projectSummary)
         .replaceAll("{{industry}}", projectIndustry)
         .replaceAll("{{imageURL}}", "the attached layout reference image")
         .replaceAll("{{logoURL}}", logoUrl ? "the attached company logo image" : "");
 
-      if (logoUrl && !systemPromptBase.includes("{{logoURL}}")) {
+      if (combinedInstructions && !promptVariation.includes(combinedInstructions)) {
+        promptVariation += `\n\n[Additional Instructions & Context]:\n${combinedInstructions}`;
+      }
+
+      if (logoUrl && !promptVariation.includes("attached company logo")) {
         promptVariation += ` Fully integrate the company logo from the attached company logo image.`;
       }
 
-      if (instructionImagesContext && !promptVariation.includes("[Referenced Context & Product Images]")) {
-        promptVariation += instructionImagesContext;
-      }
+      console.log(`[DEBUG] Executing gpt-image-2 generation for variation ${idx}`);
 
-      console.log(`[DEBUG] Invoking Supabase Edge Function generate-hero, variation ${idx}`);
-
-      const { data: edgeResult, error: edgeError } = await supabase.functions.invoke("generate-hero", {
-        body: {
-          prompt: promptVariation,
-          imageUrl: imageUrlText || undefined,
-          logoUrl: logoUrl || undefined,
-          instructionImages: instructionImages.length > 0 ? instructionImages : undefined,
-          size: "1152x2048",
-        },
-      });
-
-      if (edgeError) throw new Error(edgeError.message);
-      if (!edgeResult?.url) throw new Error("Edge function did not return an image URL.");
-
-      return {
-        url: edgeResult.url,
+      return executeImageGeneration({
         prompt: promptVariation,
-        width: edgeResult.width,
-        height: edgeResult.height,
-      };
+        imageUrl: imageUrlText || undefined,
+        logoUrl: logoUrl || undefined,
+        instructionImages: instructionImages.length > 0 ? instructionImages : undefined,
+        size: "1152x2048",
+        supabase,
+      });
     });
 
     const results = await Promise.allSettled(generationPromises);
@@ -193,6 +191,150 @@ async function processGeneration(
       })
       .eq("id", jobId);
   }
+}
+
+async function executeImageGeneration({
+  prompt,
+  imageUrl,
+  logoUrl,
+  instructionImages = [],
+  size = "1152x2048",
+  supabase,
+}: {
+  prompt: string;
+  imageUrl?: string;
+  logoUrl?: string;
+  instructionImages?: Array<{ url: string; label?: string; fileName?: string; index?: number }>;
+  size?: string;
+  supabase: SupabaseClient;
+}): Promise<{ url: string; prompt: string; width: number; height: number }> {
+  const [widthStr, heightStr] = size.split("x");
+  const width = parseInt(widthStr, 10) || 1152;
+  const height = parseInt(heightStr, 10) || 2048;
+
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+
+  if (openaiApiKey) {
+    try {
+      console.log(`[executeImageGeneration] Dispatching direct OpenAI edits call with gpt-image-2`);
+      const formData = new FormData();
+      formData.append("model", "gpt-image-2");
+      formData.append("prompt", prompt);
+      formData.append("size", size);
+
+      const totalImages = (imageUrl ? 1 : 0) + (logoUrl ? 1 : 0) + instructionImages.length;
+      const imageKey = totalImages > 1 ? "image[]" : "image";
+
+      if (imageUrl) {
+        try {
+          const res = await fetch(imageUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            formData.append(imageKey, blob, "reference-layout.png");
+          } else {
+            console.warn(`[executeImageGeneration] Failed to fetch layout reference image: ${res.status}`);
+          }
+        } catch (e) {
+          console.warn("[executeImageGeneration] Reference image fetch error:", e);
+        }
+      }
+
+      if (logoUrl) {
+        try {
+          const res = await fetch(logoUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            formData.append(imageKey, blob, "logo.png");
+          } else {
+            console.warn(`[executeImageGeneration] Failed to fetch logo image: ${res.status}`);
+          }
+        } catch (e) {
+          console.warn("[executeImageGeneration] Logo image fetch error:", e);
+        }
+      }
+
+      if (instructionImages.length > 0) {
+        for (const [idx, item] of instructionImages.entries()) {
+          const itemUrl = item.url;
+          if (!itemUrl) continue;
+          const rawFileName = item.fileName || `instruction-image-${idx + 1}.png`;
+          const safeFileName = rawFileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+          try {
+            const res = await fetch(itemUrl);
+            if (res.ok) {
+              const blob = await res.blob();
+              formData.append(imageKey, blob, `instruction-${idx + 1}-${safeFileName}`);
+            } else {
+              console.warn(`[executeImageGeneration] Failed to fetch instruction image ${idx + 1}: ${res.status}`);
+            }
+          } catch (e) {
+            console.warn(`[executeImageGeneration] Error fetching instruction image ${idx + 1}:`, e);
+          }
+        }
+      }
+
+      const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+      const apiResponse = await fetch(`${openaiBaseUrl}/images/edits`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openaiApiKey}`,
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          Accept: "application/json",
+        },
+        body: formData,
+      });
+
+      if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        console.error(`[executeImageGeneration] OpenAI API error: ${apiResponse.status}`, errorText);
+        throw new Error(`OpenAI image edit error: ${apiResponse.status} - ${errorText}`);
+      }
+
+      const payload = (await apiResponse.json()) as { data?: Array<{ url?: string; b64_json?: string }> };
+      let generatedUrl = "";
+      if (payload.data?.[0]?.url) {
+        generatedUrl = payload.data[0].url;
+      } else if (payload.data?.[0]?.b64_json) {
+        const b64 = payload.data[0].b64_json;
+        generatedUrl = b64.startsWith("data:") ? b64 : `data:image/png;base64,${b64}`;
+      }
+
+      if (!generatedUrl) {
+        throw new Error("OpenAI API returned success but payload has no image data.");
+      }
+
+      return {
+        url: generatedUrl,
+        prompt,
+        width,
+        height,
+      };
+    } catch (directErr) {
+      console.error("[executeImageGeneration] Direct generation failed, falling back to edge function:", directErr);
+    }
+  }
+
+  // Fallback to Supabase Edge Function
+  console.log(`[executeImageGeneration] Invoking fallback Supabase Edge Function generate-hero`);
+  const { data: edgeResult, error: edgeError } = await supabase.functions.invoke("generate-hero", {
+    body: {
+      prompt,
+      imageUrl: imageUrl || undefined,
+      logoUrl: logoUrl || undefined,
+      instructionImages: instructionImages.length > 0 ? instructionImages : undefined,
+      size,
+    },
+  });
+
+  if (edgeError) throw new Error(edgeError.message);
+  if (!edgeResult?.url) throw new Error("Edge function did not return an image URL.");
+
+  return {
+    url: edgeResult.url,
+    prompt,
+    width: edgeResult.width || width,
+    height: edgeResult.height || height,
+  };
 }
 
 export async function POST(request: Request) {
