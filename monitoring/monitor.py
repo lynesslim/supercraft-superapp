@@ -71,12 +71,12 @@ raw_supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("NEXT
 SUPABASE_KEY = raw_supabase_key.strip().strip('"').strip("'")
 
 # Hostinger SMTP Settings
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com").strip().strip('"').strip("'")
+SMTP_PORT = int((os.getenv("SMTP_PORT", "465") or "465").strip().strip('"').strip("'"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip().strip('"').strip("'")
+SMTP_PASS = os.getenv("SMTP_PASS", "").strip().strip('"').strip("'")
 
-raw_from = os.getenv("SMTP_FROM", "")
+raw_from = os.getenv("SMTP_FROM", "").strip().strip('"').strip("'")
 if SMTP_USER and ("<" in raw_from and ">" in raw_from):
     # Ensure the sender address matches the authenticated Hostinger user
     import re
@@ -99,7 +99,7 @@ SUSPICIOUS_PATTERNS = [
     r"online\s+casino",
     r"slot\s+gacor",
     r"judi\s+online",
-    r"viagra|cialis",
+    r"\b(viagra|cialis)\b",
     r"hacked\s+by",
     r"pwned\s+by",
     r"crypto\s+drainer",
