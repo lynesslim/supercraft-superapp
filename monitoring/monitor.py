@@ -62,8 +62,13 @@ try:
 except ImportError:
     BeautifulSoup = None
 
-SUPABASE_URL = os.getenv("NEXT_PUBLIC_SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+raw_supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL", "").strip().strip('"').strip("'").rstrip("/")
+if raw_supabase_url and not raw_supabase_url.startswith(("http://", "https://")):
+    raw_supabase_url = "https://" + raw_supabase_url
+SUPABASE_URL = raw_supabase_url
+
+raw_supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+SUPABASE_KEY = raw_supabase_key.strip().strip('"').strip("'")
 
 # Hostinger SMTP Settings
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.hostinger.com")
